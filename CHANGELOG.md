@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+- The graph layout now cools on a fixed schedule instead of running until the
+  nodes happen to slow down, so it always comes to rest in about a fifth of a
+  second. Dropping a node used to leave it creeping towards the middle for
+  several seconds: the centre pull never stops, so the old "has everything
+  slowed down?" test for being finished stayed false while the layout crawled.
+- A dragged node now stays roughly where it is dropped, and the whole opening
+  layout is computed before the first frame, so nothing is ever drawn mid-slide.
+
 ## 0.6.2
 
 - Fixed the reading panel jumping to a new editor column each time a note was
