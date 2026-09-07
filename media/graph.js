@@ -1,0 +1,446 @@
+// @ts-check
+// Small force-directed layout: repulsion between all nodes, springs along
+// references, and a weak pull toward the centre. No external libraries.
+(function () {
+  const vscode = acquireVsCodeApi();
+  const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('canvas'));
+  const ctx = canvas.getContext('2d');
+  const tip = document.getElementById('tip');
+  const filterInput = /** @type {HTMLInputElement} */ (document.getElementById('filter'));
+  const showFiles = /** @type {HTMLInputElement} */ (document.getElementById('showFiles'));
+  const showTags = /** @type {HTMLInputElement} */ (document.getElementById('showTags'));
+  const stats = document.getElementById('stats');
+
+  const PALETTE = [
+    '#4ea1ff', '#f2a63b', '#5fd39a', '#e06c9f', '#b48ead',
+    '#e5c07b', '#61afef', '#98c379', '#e06c75', '#56b6c2'
+  ];
+
+  let nodes = [];
+  let edges = [];
+  let view = { x: 0, y: 0, scale: 1 };
+  let hovered = null;
+  let dragging = null;
+  let panning = null;
+  let query = '';
+  let groupByFile = true;
+  let groupByTag = true;
+
+  function colorFor(file) {
+    let hash = 0;
+    for (let i = 0; i < file.length; i++) {
+      hash = (hash * 31 + file.charCodeAt(i)) >>> 0;
+    }
+    return PALETTE[hash % PALETTE.length];
+  }
+
+  /**
+   * Keeps the drawing buffer matched to the element. Called every frame because
+   * a webview often lays out after its script has already run, which would
+   * otherwise leave a 0x0 canvas that draws nothing forever.
+   */
+  function resize() {
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(Math.floor(canvas.clientWidth * ratio), 1);
+    const height = Math.max(Math.floor(canvas.clientHeight * ratio), 1);
+    if (canvas.width === width && canvas.height === height) {
+      return false;
+    }
+    canvas.width = width;
+    canvas.height = height;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    return true;
+  }
+
+  function setGraph(payload) {
+    const previous = new Map(nodes.map((n) => [n.id, n]));
+    const width = canvas.clientWidth || 800;
+    const height = canvas.clientHeight || 600;
+    nodes = payload.nodes.map((n, i) => {
+      const old = previous.get(n.id);
+      const angle = (i / Math.max(payload.nodes.length, 1)) * Math.PI * 2;
+      return {
+        ...n,
+        x: old ? old.x : width / 2 + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40,
+        y: old ? old.y : height / 2 + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40,
+        vx: 0,
+        vy: 0,
+        degree: 0
+      };
+    });
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    edges = [];
+    for (const edge of payload.edges) {
+      const from = byId.get(edge.from);
+      const to = byId.get(edge.to);
+      if (from && to) {
+        edges.push({ from, to, kind: 'ref' });
+        from.degree++;
+        to.degree++;
+      }
+    }
+    stats.textContent = `${nodes.length} notes · ${edges.length} links · double-click to open`;
+  }
+
+  /** Faint links between notes that share a file or a hashtag. */
+  function groupEdges() {
+    const extra = [];
+    const chain = (groups, kind) => {
+      for (const group of groups.values()) {
+        for (let i = 1; i < group.length; i++) {
+          extra.push({ from: group[i - 1], to: group[i], kind });
+        }
+      }
+    };
+    if (groupByFile) {
+      const byFile = new Map();
+      for (const node of nodes) {
+        byFile.set(node.file, [...(byFile.get(node.file) || []), node]);
+      }
+      chain(byFile, 'file');
+    }
+    if (groupByTag) {
+      const byTag = new Map();
+      for (const node of nodes) {
+        for (const tag of node.tags || []) {
+          byTag.set(tag, [...(byTag.get(tag) || []), node]);
+        }
+      }
+      chain(byTag, 'tag');
+    }
+    return extra;
+  }
+
+  function step() {
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    const springs = edges.concat(groupEdges());
+
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let distanceSq = dx * dx + dy * dy;
+        if (distanceSq < 0.01) {
+          dx = Math.random() - 0.5;
+          dy = Math.random() - 0.5;
+          distanceSq = 0.01;
+        }
+        const force = 9000 / distanceSq;
+        const distance = Math.sqrt(distanceSq);
+        const fx = (dx / distance) * force;
+        const fy = (dy / distance) * force;
+        a.vx -= fx;
+        a.vy -= fy;
+        b.vx += fx;
+        b.vy += fy;
+      }
+    }
+
+    for (const edge of springs) {
+      const dx = edge.to.x - edge.from.x;
+      const dy = edge.to.y - edge.from.y;
+      const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
+      const rest = edge.kind === 'ref' ? 130 : 90;
+      const stiffness = edge.kind === 'ref' ? 0.02 : 0.008;
+      const force = (distance - rest) * stiffness;
+      const fx = (dx / distance) * force;
+      const fy = (dy / distance) * force;
+      edge.from.vx += fx;
+      edge.from.vy += fy;
+      edge.to.vx -= fx;
+      edge.to.vy -= fy;
+    }
+
+    for (const node of nodes) {
+      node.vx += (width / 2 - node.x) * 0.0015;
+      node.vy += (height / 2 - node.y) * 0.0015;
+      if (dragging === node) {
+        node.vx = 0;
+        node.vy = 0;
+        continue;
+      }
+      node.vx *= 0.86;
+      node.vy *= 0.86;
+      node.x += Math.max(Math.min(node.vx, 12), -12);
+      node.y += Math.max(Math.min(node.vy, 12), -12);
+    }
+  }
+
+  /** Well-connected notes read as bigger hubs, with a curve that keeps the
+   *  difference visible without letting one note dominate. */
+  function radiusOf(node) {
+    return 5.5 + Math.sqrt(node.degree) * 3.6;
+  }
+
+  function isMatch(node) {
+    if (query === '') {
+      return true;
+    }
+    return (
+      node.title.toLowerCase().includes(query) ||
+      node.file.toLowerCase().includes(query) ||
+      (node.tags || []).some((tag) => ('#' + tag).includes(query)) ||
+      node.excerpt.toLowerCase().includes(query)
+    );
+  }
+
+  /** Filtered-out notes are hidden outright, not greyed: an edge is only drawn
+   *  when both of its ends are still on screen. */
+  function visibleEdge(edge) {
+    return isMatch(edge.from) && isMatch(edge.to);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    if (nodes.length === 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = getComputedStyle(document.body).color || '#ccc';
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(
+        'No notes yet. Add one with Laxative: Add Note at Cursor.',
+        canvas.clientWidth / 2,
+        canvas.clientHeight / 2
+      );
+      ctx.restore();
+      return;
+    }
+    ctx.save();
+    ctx.translate(view.x, view.y);
+    ctx.scale(view.scale, view.scale);
+
+    const style = getComputedStyle(document.body);
+    const foreground = style.color || '#ccc';
+    const neighbours = new Set();
+    if (hovered) {
+      neighbours.add(hovered.id);
+      for (const edge of edges) {
+        if (edge.from === hovered) neighbours.add(edge.to.id);
+        if (edge.to === hovered) neighbours.add(edge.from.id);
+      }
+    }
+
+    for (const edge of edges.concat(groupEdges()).filter(visibleEdge)) {
+      const active = !hovered || edge.from === hovered || edge.to === hovered;
+      ctx.strokeStyle = foreground;
+      ctx.globalAlpha = edge.kind === 'ref' ? (active ? 0.5 : 0.1) : active ? 0.16 : 0.05;
+      ctx.lineWidth = edge.kind === 'ref' ? 1.4 : 1;
+      ctx.setLineDash(edge.kind === 'ref' ? [] : edge.kind === 'tag' ? [1, 4] : [3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(edge.from.x, edge.from.y);
+      ctx.lineTo(edge.to.x, edge.to.y);
+      ctx.stroke();
+
+      if (edge.kind === 'ref') {
+        // Arrow head, stopped at the target's edge.
+        const dx = edge.to.x - edge.from.x;
+        const dy = edge.to.y - edge.from.y;
+        const distance = Math.max(Math.hypot(dx, dy), 0.01);
+        const r = radiusOf(edge.to) + 2;
+        const tipX = edge.to.x - (dx / distance) * r;
+        const tipY = edge.to.y - (dy / distance) * r;
+        const angle = Math.atan2(dy, dx);
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - 7 * Math.cos(angle - 0.4), tipY - 7 * Math.sin(angle - 0.4));
+        ctx.lineTo(tipX - 7 * Math.cos(angle + 0.4), tipY - 7 * Math.sin(angle + 0.4));
+        ctx.closePath();
+        ctx.fillStyle = foreground;
+        ctx.fill();
+      }
+    }
+    ctx.setLineDash([]);
+
+    for (const node of nodes) {
+      if (!isMatch(node)) {
+        continue;
+      }
+      const dimmed = hovered && !neighbours.has(node.id);
+      ctx.globalAlpha = dimmed ? 0.25 : 1;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radiusOf(node), 0, Math.PI * 2);
+      ctx.fillStyle = colorFor(node.file);
+      ctx.fill();
+      if (node === hovered) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = foreground;
+        ctx.stroke();
+      }
+      if (view.scale > 0.55 || node === hovered) {
+        ctx.globalAlpha = dimmed ? 0.3 : 0.9;
+        ctx.fillStyle = foreground;
+        ctx.font = `${Math.min(11 + node.degree * 0.4, 15).toFixed(1)}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        const label = node.title.length > 28 ? node.title.slice(0, 27) + '…' : node.title;
+        ctx.fillText(label, node.x, node.y + radiusOf(node) + 12);
+      }
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  let lastReport = '';
+
+  function frame() {
+    if (resize() && nodes.length > 0) {
+      recentre();
+    }
+    step();
+    draw();
+    report();
+    requestAnimationFrame(frame);
+  }
+
+  /** Reports what is actually on the canvas whenever that changes. */
+  function report() {
+    const state = `${nodes.length}:${edges.length}:${canvas.width}x${canvas.height}`;
+    if (state !== lastReport) {
+      lastReport = state;
+      vscode.postMessage({
+        type: 'painted',
+        nodes: nodes.length,
+        edges: edges.length,
+        width: canvas.width,
+        height: canvas.height
+      });
+    }
+  }
+
+  /** Pulls the layout back to the middle after the canvas gets its real size. */
+  function recentre() {
+    const cx = nodes.reduce((sum, n) => sum + n.x, 0) / nodes.length;
+    const cy = nodes.reduce((sum, n) => sum + n.y, 0) / nodes.length;
+    const dx = canvas.clientWidth / 2 - cx;
+    const dy = canvas.clientHeight / 2 - cy;
+    for (const node of nodes) {
+      node.x += dx;
+      node.y += dy;
+    }
+  }
+
+  function toWorld(event) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left - view.x) / view.scale,
+      y: (event.clientY - rect.top - view.y) / view.scale
+    };
+  }
+
+  function nodeAt(point) {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const node = nodes[i];
+      if (
+        isMatch(node) &&
+        Math.hypot(node.x - point.x, node.y - point.y) <= radiusOf(node) + 6
+      ) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  canvas.addEventListener('mousedown', (e) => {
+    const point = toWorld(e);
+    const node = nodeAt(point);
+    if (node) {
+      dragging = node;
+      dragging.grabbed = true;
+    } else {
+      panning = { x: e.clientX - view.x, y: e.clientY - view.y };
+      canvas.classList.add('dragging');
+    }
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    const point = toWorld(e);
+    if (dragging) {
+      dragging.x = point.x;
+      dragging.y = point.y;
+      return;
+    }
+    if (panning) {
+      view.x = e.clientX - panning.x;
+      view.y = e.clientY - panning.y;
+      return;
+    }
+    const node = nodeAt(point);
+    hovered = node;
+    if (node) {
+      tip.hidden = false;
+      tip.innerHTML = '';
+      const title = document.createElement('b');
+      title.textContent = node.title;
+      const where = document.createElement('div');
+      where.className = 'where';
+      where.textContent = `${node.file}:${node.line + 1}`;
+      const excerpt = document.createElement('div');
+      excerpt.className = 'excerpt';
+      excerpt.textContent = node.excerpt;
+      tip.append(title, where);
+      if ((node.tags || []).length > 0) {
+        const tags = document.createElement('div');
+        tags.className = 'where';
+        tags.textContent = node.tags.map((t) => '#' + t).join(' ');
+        tip.append(tags);
+      }
+      tip.append(excerpt);
+      const rect = canvas.getBoundingClientRect();
+      tip.style.left = `${Math.min(e.clientX - rect.left + 14, rect.width - 260)}px`;
+      tip.style.top = `${e.clientY - rect.top + 14}px`;
+    } else {
+      tip.hidden = true;
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    dragging = null;
+    panning = null;
+    canvas.classList.remove('dragging');
+  });
+
+  // Single click selects and drags; only a double click opens the note, so
+  // dragging a node around never yanks the editor open.
+  canvas.addEventListener('dblclick', (e) => {
+    const node = nodeAt(toWorld(e));
+    if (node) {
+      vscode.postMessage({ type: e.altKey ? 'reveal' : 'open', id: node.id });
+    }
+  });
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    const next = Math.min(Math.max(view.scale * factor, 0.2), 4);
+    view.x = mx - ((mx - view.x) / view.scale) * next;
+    view.y = my - ((my - view.y) / view.scale) * next;
+    view.scale = next;
+  }, { passive: false });
+
+  filterInput.addEventListener('input', () => {
+    query = filterInput.value.trim().toLowerCase();
+  });
+  showFiles.addEventListener('change', () => {
+    groupByFile = showFiles.checked;
+  });
+  showTags.addEventListener('change', () => {
+    groupByTag = showTags.checked;
+  });
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('message', (event) => {
+    if (event.data.type === 'graph') {
+      setGraph(event.data);
+    }
+  });
+
+  resize();
+  frame();
+  vscode.postMessage({ type: 'ready' });
+})();

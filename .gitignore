@@ -1,0 +1,12 @@
+node_modules/
+out/
+out-test/
+.vscode-test/
+*.vsix
+dist/
+
+# Local, machine-specific notes and release process; never published.
+LOCAL.md
+*.local.md
+PUBLISHING.md
+docker/publish.sh

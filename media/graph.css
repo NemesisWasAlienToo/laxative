@@ -1,0 +1,48 @@
+:root { color-scheme: light dark; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+}
+#hud {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  right: 0.6rem;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  z-index: 5;
+  pointer-events: none;
+}
+#hud > * { pointer-events: auto; }
+#filter {
+  width: 16rem;
+  padding: 0.3rem 0.5rem;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  font-family: inherit;
+}
+#filter:focus { outline: 1px solid var(--vscode-focusBorder); }
+#hud label { font-size: 0.85em; opacity: 0.8; display: flex; align-items: center; gap: 0.3rem; }
+#stats { font-size: 0.85em; opacity: 0.6; margin-left: auto; }
+#canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+#canvas.dragging { cursor: grabbing; }
+#tip {
+  position: absolute;
+  z-index: 10;
+  max-width: 22rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, #666));
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+}
+#tip b { display: block; margin-bottom: 0.2rem; }
+#tip .where { opacity: 0.65; font-size: 0.85em; }
+#tip .excerpt { margin-top: 0.35rem; opacity: 0.85; white-space: pre-wrap; font-size: 0.88em; }

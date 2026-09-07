@@ -1,0 +1,430 @@
+{
+  "name": "laxative",
+  "displayName": "Laxative",
+  "description": "Attach markdown notes to places in your code without editing the code. Notes live in a git-friendly file, cross-reference each other, group by hashtag, and can be browsed as a list or a graph.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Notebooks",
+    "Other"
+  ],
+  "keywords": [
+    "notes",
+    "annotations",
+    "comments",
+    "markdown",
+    "graph",
+    "code review"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Laxative",
+      "properties": {
+        "laxative.storeFile": {
+          "type": "string",
+          "default": ".laxative/notes.json",
+          "scope": "resource",
+          "markdownDescription": "Where notes are stored, relative to the workspace root. Commit this file to git to share notes with your team, or point it at an ignored path (for example `.laxative/notes.local.json`) to keep them to yourself. Run **Laxative: Configure Storage** to change it with a guided prompt that also moves your existing notes."
+        },
+        "laxative.listClickAction": {
+          "type": "array",
+          "default": [
+            "reveal",
+            "preview"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "reveal",
+              "preview",
+              "edit"
+            ],
+            "enumDescriptions": [
+              "Jump to the annotated line in the code.",
+              "Open the rendered note in the reading panel.",
+              "Open the note's markdown in an editor."
+            ]
+          },
+          "markdownDescription": "What clicking a note in the **Notes** view does. Pick any combination; an empty list makes clicking do nothing."
+        },
+        "laxative.showGutterIcon": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a note icon in the gutter next to annotated lines. This is the note's only icon; the CodeLens and end-of-line hint are plain text."
+        },
+        "laxative.showInlineTitle": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the note title dimmed at the end of the annotated line. Off by default because the CodeLens above the line already shows it; turn this on and laxative.showCodeLens off for a more compact view."
+        },
+        "laxative.showCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the note title as a clickable CodeLens above the annotated line."
+        },
+        "laxative.confirmDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before deleting a note."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "laxative",
+          "title": "Laxative",
+          "icon": "media/activity-bar.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "laxativeGraph",
+          "title": "Note Graph",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "laxative": [
+        {
+          "id": "laxative.notesView",
+          "name": "Notes",
+          "icon": "media/activity-bar.svg"
+        }
+      ],
+      "laxativeGraph": [
+        {
+          "id": "laxative.graphView",
+          "name": "Note Graph",
+          "type": "webview",
+          "contextualTitle": "Laxative"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "laxative.notesView",
+        "contents": "No notes yet.\n\nPut the cursor on a line of code and add a note. Notes are stored in a git-friendly file and never touch your source.\n[Add note at cursor](command:laxative.addNote)\n[Import notes](command:laxative.import)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "laxative.addNote",
+        "title": "Add Note at Cursor",
+        "category": "Laxative",
+        "icon": "$(add)"
+      },
+      {
+        "command": "laxative.openNote",
+        "title": "Open Note",
+        "category": "Laxative"
+      },
+      {
+        "command": "laxative.editNote",
+        "title": "Edit Note",
+        "category": "Laxative",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "laxative.deleteNote",
+        "title": "Delete Note",
+        "category": "Laxative",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "laxative.revealNote",
+        "title": "Reveal Note in Editor",
+        "category": "Laxative",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "laxative.notesAtCursor",
+        "title": "Show Notes at Cursor",
+        "category": "Laxative"
+      },
+      {
+        "command": "laxative.searchNotes",
+        "title": "Search Notes",
+        "category": "Laxative",
+        "icon": "$(search)"
+      },
+      {
+        "command": "laxative.copyReference",
+        "title": "Copy Reference to Note",
+        "category": "Laxative",
+        "icon": "$(link)"
+      },
+      {
+        "command": "laxative.showGraph",
+        "title": "Show Note Graph",
+        "category": "Laxative",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "laxative.export",
+        "title": "Export Notes...",
+        "category": "Laxative",
+        "icon": "$(export)"
+      },
+      {
+        "command": "laxative.import",
+        "title": "Import Notes...",
+        "category": "Laxative",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "laxative.openStoreFile",
+        "title": "Open Notes Store File",
+        "category": "Laxative",
+        "icon": "$(json)"
+      },
+      {
+        "command": "laxative.refresh",
+        "title": "Refresh Notes",
+        "category": "Laxative",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "laxative.groupByTag",
+        "title": "Group Notes by Hashtag",
+        "category": "Laxative",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "laxative.groupByFile",
+        "title": "Group Notes by File",
+        "category": "Laxative",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "laxative.filterByTag",
+        "title": "Filter Notes by Hashtag...",
+        "category": "Laxative",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "laxative.clearTagFilter",
+        "title": "Clear Hashtag Filter",
+        "category": "Laxative",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "laxative.configureStorage",
+        "title": "Configure Storage...",
+        "category": "Laxative",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "laxative.showDiagnostics",
+        "title": "Show Rendering Diagnostics",
+        "category": "Laxative"
+      },
+      {
+        "command": "laxative.activateNote",
+        "title": "Open Note from List",
+        "category": "Laxative"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "laxative.openNote",
+          "when": "false"
+        },
+        {
+          "command": "laxative.editNote",
+          "when": "false"
+        },
+        {
+          "command": "laxative.deleteNote",
+          "when": "false"
+        },
+        {
+          "command": "laxative.revealNote",
+          "when": "false"
+        },
+        {
+          "command": "laxative.copyReference",
+          "when": "false"
+        },
+        {
+          "command": "laxative.clearTagFilter",
+          "when": "laxative.hasTagFilter"
+        },
+        {
+          "command": "laxative.activateNote",
+          "when": "false"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "laxative.addNote",
+          "group": "laxative@1"
+        },
+        {
+          "command": "laxative.notesAtCursor",
+          "group": "laxative@2",
+          "when": "laxative.hasNoteAtCursor"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "laxative.addNote",
+          "when": "view == laxative.notesView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "laxative.searchNotes",
+          "when": "view == laxative.notesView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "laxative.showGraph",
+          "when": "view == laxative.notesView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "laxative.refresh",
+          "when": "view == laxative.notesView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "laxative.export",
+          "when": "view == laxative.notesView",
+          "group": "1_store@1"
+        },
+        {
+          "command": "laxative.import",
+          "when": "view == laxative.notesView",
+          "group": "1_store@2"
+        },
+        {
+          "command": "laxative.openStoreFile",
+          "when": "view == laxative.notesView",
+          "group": "1_store@3"
+        },
+        {
+          "command": "laxative.groupByTag",
+          "when": "view == laxative.notesView && laxative.groupBy == file",
+          "group": "navigation@0"
+        },
+        {
+          "command": "laxative.groupByFile",
+          "when": "view == laxative.notesView && laxative.groupBy == tag",
+          "group": "navigation@0"
+        },
+        {
+          "command": "laxative.filterByTag",
+          "when": "view == laxative.notesView && !laxative.hasTagFilter",
+          "group": "navigation@2"
+        },
+        {
+          "command": "laxative.clearTagFilter",
+          "when": "view == laxative.notesView && laxative.hasTagFilter",
+          "group": "navigation@2"
+        },
+        {
+          "command": "laxative.configureStorage",
+          "when": "view == laxative.notesView",
+          "group": "1_store@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "laxative.revealNote",
+          "when": "view == laxative.notesView && viewItem == laxative",
+          "group": "inline@1"
+        },
+        {
+          "command": "laxative.editNote",
+          "when": "view == laxative.notesView && viewItem == laxative",
+          "group": "inline@2"
+        },
+        {
+          "command": "laxative.deleteNote",
+          "when": "view == laxative.notesView && viewItem == laxative",
+          "group": "1_mod@1"
+        },
+        {
+          "command": "laxative.copyReference",
+          "when": "view == laxative.notesView && viewItem == laxative",
+          "group": "1_mod@2"
+        },
+        {
+          "command": "laxative.filterByTag",
+          "when": "view == laxative.notesView && viewItem == laxativeTag",
+          "group": "inline@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "laxative.addNote",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "laxative.searchNotes",
+        "key": "ctrl+alt+shift+m",
+        "mac": "cmd+alt+shift+m"
+      },
+      {
+        "command": "laxative.notesAtCursor",
+        "key": "ctrl+alt+j",
+        "mac": "cmd+alt+j",
+        "when": "editorTextFocus && laxative.hasNoteAtCursor"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "compile-tests": "tsc -p tsconfig.test.json",
+    "test:unit": "npm run compile-tests && mocha 'out-test/test/unit/**/*.test.js'",
+    "test:integration": "npm run build && npm run compile-tests && node out-test/test/integration/runTests.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "package": "npm run build && vsce package --no-dependencies -o laxative.vsix",
+    "publish:vsce": "vsce publish --no-dependencies",
+    "publish:ovsx": "ovsx publish --no-dependencies"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "@types/markdown-it": "^14.1.2",
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.23.0",
+    "glob": "^11.0.0",
+    "jsdom": "^25.0.0",
+    "mocha": "^10.7.0",
+    "ovsx": "^0.10.0",
+    "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/laxative.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OWNER/laxative/issues"
+  },
+  "galleryBanner": {
+    "color": "#1f2430",
+    "theme": "dark"
+  }
+}
