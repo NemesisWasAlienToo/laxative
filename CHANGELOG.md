@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1
+
+- The graph no longer replays its whole layout animation every time the panel is
+  reopened. Node positions, pan, zoom, filter text and the grouping checkboxes
+  are kept in the view's persisted state, so reopening it from the status bar
+  looks the same as switching back to its tab.
+- Laying out a graph for the first time now happens before the first frame is
+  drawn, instead of over several seconds of visible drift, and the simulation
+  freezes once motion dies down rather than jittering forever.
+
 ## 0.6.0
 
 - Renamed the extension to **Laxative**. Command ids, settings and the notes

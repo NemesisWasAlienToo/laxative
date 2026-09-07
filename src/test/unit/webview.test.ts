@@ -15,21 +15,32 @@ interface Harness {
   dom: JSDOM;
   window: any;
   posted: any[];
+  /** What the script has persisted through the webview state API. */
+  state: { current: any };
   send(message: unknown): void;
   destroy(): void;
 }
 
-function load(script: string, html: string, prepare?: (window: any) => void): Harness {
+function load(
+  script: string,
+  html: string,
+  prepare?: (window: any) => void,
+  initialState?: unknown
+): Harness {
   const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`, {
     runScripts: 'dangerously',
     pretendToBeVisual: true
   });
   const window = dom.window as any;
   const posted: any[] = [];
+  const state = { current: initialState };
   window.acquireVsCodeApi = () => ({
     postMessage: (message: unknown) => posted.push(message),
-    getState: () => undefined,
-    setState: () => undefined
+    getState: () => state.current,
+    setState: (value: unknown) => {
+      state.current = value;
+      return value;
+    }
   });
   prepare?.(window);
   window.eval(fs.readFileSync(path.join(MEDIA, script), 'utf8'));
@@ -37,6 +48,7 @@ function load(script: string, html: string, prepare?: (window: any) => void): Ha
     dom,
     window,
     posted,
+    state,
     send: (message) => window.dispatchEvent(new window.MessageEvent('message', { data: message })),
     destroy: () => dom.window.close()
   };
@@ -287,7 +299,11 @@ describe('graph webview', () => {
 
   it('opens a note on double click only, so dragging one never opens it', async () => {
     const size = { width: 800, height: 600 };
-    harness = load('graph.js', HTML, prepareCanvas(size, { fixedLayout: true }));
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas(size, { fixedLayout: true, recordArcs: true })
+    );
     harness.send({
       type: 'graph',
       nodes: [{ id: 'solo', title: 'Solo', file: 'src/a.ts', line: 1, tags: [], excerpt: '' }],
@@ -302,9 +318,13 @@ describe('graph webview', () => {
       target.dispatchEvent(new harness.window.MouseEvent(type, at(x, y)));
     const opens = () => harness.posted.filter((m: any) => m.type === 'open');
 
-    // The single node is seeded a fixed distance right of centre. Grab it and
-    // drag it somewhere known: exactly the gesture that used to open the note.
-    mouse(canvas, 'mousedown', 560, 300);
+    // Aim at wherever the node was last painted, rather than assuming the
+    // layout leaves it in any particular place.
+    const [nodeX, nodeY] = harness.window.__context.arcs.at(-1);
+
+    // Grab it and drag it somewhere known: exactly the gesture that used to
+    // open the note.
+    mouse(canvas, 'mousedown', nodeX, nodeY);
     mouse(harness.window, 'mousemove', 250, 200);
     mouse(harness.window, 'mouseup', 250, 200);
     assert.strictEqual(opens().length, 0, 'dragging a node opens nothing');
@@ -331,6 +351,85 @@ describe('graph webview', () => {
     const ratio = harness.window.devicePixelRatio || 1;
     assert.strictEqual(harness.window.document.getElementById('canvas').width, 900 * ratio);
     assert.ok(harness.window.__context.calls.arc > 0, 'nodes are drawn once there is room');
+  });
+
+  it('settles within a couple of hundred milliseconds', async () => {
+    // The layout used to crawl into place for several seconds after every
+    // reopen, which made the graph unusable while it moved.
+    harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }, { recordArcs: true }));
+    harness.send(graph);
+
+    const positions = () => {
+      const arcs = harness.window.__context.arcs;
+      return arcs.slice(-graph.nodes.length).map((a: any) => [a[0], a[1]]);
+    };
+    await delay(200);
+    const early = positions();
+    await delay(400);
+    const late = positions();
+
+    assert.strictEqual(early.length, graph.nodes.length, 'both notes are drawn');
+    const moved = Math.max(
+      ...early.map((p: number[], i: number) =>
+        Math.hypot(p[0] - late[i][0], p[1] - late[i][1])
+      )
+    );
+    assert.ok(moved < 2, `layout is already at rest 200ms in (moved ${moved.toFixed(2)}px after)`);
+  });
+
+  it('remembers its layout so reopening the panel does not re-animate', async () => {
+    const remembered = {
+      v: 2,
+      positions: { a: [120, 140], b: [660, 470] },
+      view: { x: 0, y: 0, scale: 1 },
+      query: '',
+      groupByFile: true,
+      groupByTag: true
+    };
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true }),
+      remembered
+    );
+    harness.send(graph);
+    await delay(200);
+
+    const drawn = harness.window.__context.arcs.slice(-2).map((a: any) => [a[0], a[1]]);
+    assert.deepStrictEqual(
+      drawn.map((p: number[]) => [Math.round(p[0]), Math.round(p[1])]),
+      [[120, 140], [660, 470]],
+      'nodes come back exactly where they were left, with no settling animation'
+    );
+  });
+
+  it('restores the filter and grouping it was left with', async () => {
+    harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }), {
+      v: 2,
+      positions: {},
+      view: { x: 0, y: 0, scale: 1 },
+      query: 'second',
+      groupByFile: false,
+      groupByTag: true
+    });
+    const byId = (id: string) => harness.window.document.getElementById(id);
+    assert.strictEqual(byId('filter').value, 'second');
+    assert.strictEqual(byId('showFiles').checked, false);
+    assert.strictEqual(byId('showTags').checked, true);
+  });
+
+  it('persists where the notes ended up once it has settled', async () => {
+    harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+    harness.send(graph);
+    await delay(600);
+
+    const saved = harness.state.current;
+    assert.ok(saved, 'something was persisted');
+    assert.strictEqual(saved.v, 2);
+    assert.deepStrictEqual(Object.keys(saved.positions).sort(), ['a', 'b']);
+    for (const id of ['a', 'b']) {
+      assert.ok(Number.isFinite(saved.positions[id][0]), `${id} has a real x`);
+    }
   });
 
   it('says so instead of drawing nothing when there are no notes', async () => {

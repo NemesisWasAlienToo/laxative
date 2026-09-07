@@ -25,6 +25,47 @@
   let query = '';
   let groupByFile = true;
   let groupByTag = true;
+  /** True once motion has died down; the simulation then stops until something
+   *  disturbs it, so a settled graph costs nothing and never jitters. */
+  let settled = false;
+  /** True when every node came back from a previous session at its old spot. */
+  let restoredLayout = false;
+  let saveTimer = null;
+
+  // The view is torn down and rebuilt whenever its panel is closed and
+  // reopened, so the layout is kept in the webview's own persisted state.
+  // Without this every reopen re-ran the whole animation from scratch.
+  const STATE_VERSION = 2;
+
+  function loadState() {
+    const saved = vscode.getState();
+    return saved && saved.v === STATE_VERSION ? saved : null;
+  }
+
+  function saveState() {
+    const positions = {};
+    for (const node of nodes) {
+      positions[node.id] = [Math.round(node.x * 10) / 10, Math.round(node.y * 10) / 10];
+    }
+    vscode.setState({
+      v: STATE_VERSION,
+      positions,
+      view: { x: view.x, y: view.y, scale: view.scale },
+      query,
+      groupByFile,
+      groupByTag
+    });
+  }
+
+  function saveStateSoon() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveState, 250);
+  }
+
+  /** Something changed: let the simulation run again until it re-settles. */
+  function unsettle() {
+    settled = false;
+  }
 
   function colorFor(file) {
     let hash = 0;
@@ -53,20 +94,28 @@
   }
 
   function setGraph(payload) {
+    const saved = loadState();
     const previous = new Map(nodes.map((n) => [n.id, n]));
     const width = canvas.clientWidth || 800;
     const height = canvas.clientHeight || 600;
+    let placed = 0;
     nodes = payload.nodes.map((n, i) => {
       const old = previous.get(n.id);
+      const remembered = saved && saved.positions && saved.positions[n.id];
       const angle = (i / Math.max(payload.nodes.length, 1)) * Math.PI * 2;
-      return {
-        ...n,
-        x: old ? old.x : width / 2 + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40,
-        y: old ? old.y : height / 2 + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40,
-        vx: 0,
-        vy: 0,
-        degree: 0
-      };
+      let x;
+      let y;
+      if (old) {
+        ({ x, y } = old);
+        placed++;
+      } else if (remembered) {
+        [x, y] = remembered;
+        placed++;
+      } else {
+        x = width / 2 + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40;
+        y = height / 2 + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40;
+      }
+      return { ...n, x, y, vx: 0, vy: 0, degree: 0 };
     });
     const byId = new Map(nodes.map((n) => [n.id, n]));
     edges = [];
@@ -79,7 +128,30 @@
         to.degree++;
       }
     }
+    restoredLayout = nodes.length > 0 && placed === nodes.length;
+    if (restoredLayout) {
+      // Every note is where it was left: show that, do not animate to it.
+      settled = true;
+    } else {
+      settled = false;
+      burnIn();
+    }
     stats.textContent = `${nodes.length} notes · ${edges.length} links · double-click to open`;
+  }
+
+  /**
+   * Runs the simulation without drawing, so the first frame the user sees is
+   * already laid out rather than crawling into place over several seconds.
+   * The iteration count is capped against the O(n^2) repulsion so this stays
+   * well inside a single frame even for a large graph.
+   */
+  function burnIn() {
+    const count = Math.max(nodes.length, 1);
+    const iterations = Math.max(40, Math.min(400, Math.floor(300000 / (count * count))));
+    for (let i = 0; i < iterations && !settled; i++) {
+      step();
+    }
+    settled = false; // Let the visible frames polish the last of it.
   }
 
   /** Faint links between notes that share a file or a hashtag. */
@@ -112,8 +184,11 @@
   }
 
   function step() {
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
+    if (settled && !dragging) {
+      return;
+    }
+    const width = canvas.clientWidth || 800;
+    const height = canvas.clientHeight || 600;
     const springs = edges.concat(groupEdges());
 
     for (let i = 0; i < nodes.length; i++) {
@@ -166,6 +241,17 @@
       node.vy *= 0.86;
       node.x += Math.max(Math.min(node.vx, 12), -12);
       node.y += Math.max(Math.min(node.vy, 12), -12);
+    }
+
+    if (!dragging) {
+      let motion = 0;
+      for (const node of nodes) {
+        motion += Math.abs(node.vx) + Math.abs(node.vy);
+      }
+      if (nodes.length === 0 || motion / nodes.length < 0.08) {
+        settled = true;
+        saveStateSoon();
+      }
     }
   }
 
@@ -286,8 +372,9 @@
   let lastReport = '';
 
   function frame() {
-    if (resize() && nodes.length > 0) {
+    if (resize() && nodes.length > 0 && !restoredLayout) {
       recentre();
+      unsettle();
     }
     step();
     draw();
@@ -348,7 +435,7 @@
     const node = nodeAt(point);
     if (node) {
       dragging = node;
-      dragging.grabbed = true;
+      unsettle();
     } else {
       panning = { x: e.clientX - view.x, y: e.clientY - view.y };
       canvas.classList.add('dragging');
@@ -397,6 +484,9 @@
   });
 
   window.addEventListener('mouseup', () => {
+    if (dragging || panning) {
+      saveStateSoon();
+    }
     dragging = null;
     panning = null;
     canvas.classList.remove('dragging');
@@ -421,16 +511,23 @@
     view.x = mx - ((mx - view.x) / view.scale) * next;
     view.y = my - ((my - view.y) / view.scale) * next;
     view.scale = next;
+    saveStateSoon();
   }, { passive: false });
 
   filterInput.addEventListener('input', () => {
+    // Filtering only hides nodes, so the layout does not need to move.
     query = filterInput.value.trim().toLowerCase();
+    saveStateSoon();
   });
   showFiles.addEventListener('change', () => {
     groupByFile = showFiles.checked;
+    unsettle(); // Grouping links are springs, so the layout has to re-settle.
+    saveStateSoon();
   });
   showTags.addEventListener('change', () => {
     groupByTag = showTags.checked;
+    unsettle();
+    saveStateSoon();
   });
 
   window.addEventListener('resize', resize);
@@ -439,6 +536,25 @@
       setGraph(event.data);
     }
   });
+
+  // Restore the controls before the first graph arrives, so what comes back is
+  // filtered and framed exactly as it was left.
+  const startup = loadState();
+  if (startup) {
+    if (startup.view) {
+      view = { x: startup.view.x, y: startup.view.y, scale: startup.view.scale };
+    }
+    query = startup.query || '';
+    filterInput.value = startup.query || '';
+    if (typeof startup.groupByFile === 'boolean') {
+      groupByFile = startup.groupByFile;
+      showFiles.checked = groupByFile;
+    }
+    if (typeof startup.groupByTag === 'boolean') {
+      groupByTag = startup.groupByTag;
+      showTags.checked = groupByTag;
+    }
+  }
 
   resize();
   frame();
