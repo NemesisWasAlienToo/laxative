@@ -353,28 +353,63 @@ describe('graph webview', () => {
     assert.ok(harness.window.__context.calls.arc > 0, 'nodes are drawn once there is room');
   });
 
-  it('settles within a couple of hundred milliseconds', async () => {
+  it('opens on a finished layout instead of animating into one', async () => {
     // The layout used to crawl into place for several seconds after every
-    // reopen, which made the graph unusable while it moved.
+    // reopen, which made the graph unusable while it moved. The whole anneal
+    // now happens before the first paint, so the very first frame is final.
     harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }, { recordArcs: true }));
     harness.send(graph);
 
-    const positions = () => {
-      const arcs = harness.window.__context.arcs;
-      return arcs.slice(-graph.nodes.length).map((a: any) => [a[0], a[1]]);
-    };
-    await delay(200);
-    const early = positions();
+    const arcs = () => harness.window.__context.arcs;
+    const positions = (from: any[]) => from.map((a: any) => [a[0], a[1]]);
     await delay(400);
-    const late = positions();
+    const first = positions(arcs().slice(0, graph.nodes.length));
+    const last = positions(arcs().slice(-graph.nodes.length));
 
-    assert.strictEqual(early.length, graph.nodes.length, 'both notes are drawn');
+    assert.strictEqual(first.length, graph.nodes.length, 'both notes are drawn');
     const moved = Math.max(
-      ...early.map((p: number[], i: number) =>
-        Math.hypot(p[0] - late[i][0], p[1] - late[i][1])
-      )
+      ...first.map((p: number[], i: number) => Math.hypot(p[0] - last[i][0], p[1] - last[i][1]))
     );
-    assert.ok(moved < 2, `layout is already at rest 200ms in (moved ${moved.toFixed(2)}px after)`);
+    assert.ok(moved < 1, `first frame is the finished layout (it moved ${moved.toFixed(2)}px after)`);
+  });
+
+  it('comes to a stop soon after a node is dropped, near where it was dropped', async () => {
+    // Dropping a node used to leave it creeping towards the middle for
+    // seconds, because the centre pull never stops and the old stop condition
+    // only watched for slow velocities — which a constant force keeps alive.
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { fixedLayout: true, recordArcs: true })
+    );
+    harness.send({
+      type: 'graph',
+      nodes: [{ id: 'solo', title: 'Solo', file: 'src/a.ts', line: 1, tags: [], excerpt: '' }],
+      edges: [],
+      broken: []
+    });
+    await delay(120);
+
+    const canvas = harness.window.document.getElementById('canvas');
+    const at = (x: number, y: number) => ({ clientX: x, clientY: y, bubbles: true });
+    const mouse = (target: any, type: string, x: number, y: number) =>
+      target.dispatchEvent(new harness.window.MouseEvent(type, at(x, y)));
+    const painted = () => harness.window.__context.arcs.at(-1).slice(0, 2) as number[];
+
+    const [nodeX, nodeY] = painted();
+    mouse(canvas, 'mousedown', nodeX, nodeY);
+    mouse(harness.window, 'mousemove', 700, 90);
+    mouse(harness.window, 'mouseup', 700, 90);
+
+    await delay(250);
+    const settledAt = painted();
+    await delay(400);
+    const later = painted();
+
+    const drift = Math.hypot(settledAt[0] - later[0], settledAt[1] - later[1]);
+    assert.ok(drift < 1, `at rest 250ms after the drop (still moved ${drift.toFixed(2)}px)`);
+    const fromDrop = Math.hypot(settledAt[0] - 700, settledAt[1] - 90);
+    assert.ok(fromDrop < 60, `stays roughly where it was put (drifted ${fromDrop.toFixed(0)}px)`);
   });
 
   it('remembers its layout so reopening the panel does not re-animate', async () => {

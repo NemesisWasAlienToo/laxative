@@ -28,6 +28,18 @@
   /** True once motion has died down; the simulation then stops until something
    *  disturbs it, so a settled graph costs nothing and never jitters. */
   let settled = false;
+
+  // Every force is scaled by `alpha`, which cools towards `alphaTarget` on a
+  // fixed schedule. Convergence is then bounded by the schedule rather than by
+  // how far the layout happens to have to travel: without this a node dropped
+  // far from the middle crept towards it for seconds, because the centre pull
+  // is constant and the old stop condition only watched for slow velocities.
+  const ALPHA_MIN = 0.02;      // colder than this and the layout is done
+  const ALPHA_DECAY = 0.08;    // 1 -> ALPHA_MIN in ~47 steps
+  const STEPS_PER_FRAME = 4;   // so those steps take ~12 frames, not ~47
+  const DRAG_ALPHA = 0.35;     // how hard the rest reacts while you drag one
+  let alpha = 0;
+  let alphaTarget = 0;
   /** True when every node came back from a previous session at its old spot. */
   let restoredLayout = false;
   let saveTimer = null;
@@ -62,8 +74,10 @@
     saveTimer = setTimeout(saveState, 250);
   }
 
-  /** Something changed: let the simulation run again until it re-settles. */
-  function unsettle() {
+  /** Something changed: warm the layout back up so it re-settles, then stops. */
+  function unsettle(warmth) {
+    alpha = Math.max(alpha, warmth === undefined ? 0.5 : warmth);
+    alphaTarget = 0;
     settled = false;
   }
 
@@ -131,27 +145,49 @@
     restoredLayout = nodes.length > 0 && placed === nodes.length;
     if (restoredLayout) {
       // Every note is where it was left: show that, do not animate to it.
-      settled = true;
+      rest();
     } else {
-      settled = false;
-      burnIn();
+      // A layout with some notes already placed only needs room made for the
+      // new ones, so it starts warm rather than hot and barely disturbs the
+      // notes you had arranged.
+      burnIn(placed > 0 ? 0.5 : 1);
     }
+    saveStateSoon();
     stats.textContent = `${nodes.length} notes · ${edges.length} links · double-click to open`;
   }
 
+  /** Stops the simulation dead: no residual velocity, no lingering drift. */
+  function rest() {
+    for (const node of nodes) {
+      node.vx = 0;
+      node.vy = 0;
+    }
+    alpha = 0;
+    alphaTarget = 0;
+    settled = true;
+  }
+
   /**
-   * Runs the simulation without drawing, so the first frame the user sees is
-   * already laid out rather than crawling into place over several seconds.
-   * The iteration count is capped against the O(n^2) repulsion so this stays
-   * well inside a single frame even for a large graph.
+   * Runs the whole anneal without drawing, so the first frame the user sees is
+   * a finished layout at rest rather than one crawling into place. Held hot for
+   * the first stretch to spread the notes out, then cooled to a stop. The
+   * budget is capped against the O(n^2) repulsion so even a large graph stays
+   * well inside a single frame.
    */
-  function burnIn() {
+  function burnIn(warmth) {
     const count = Math.max(nodes.length, 1);
-    const iterations = Math.max(40, Math.min(400, Math.floor(300000 / (count * count))));
-    for (let i = 0; i < iterations && !settled; i++) {
+    const budget = Math.max(60, Math.min(600, Math.floor(400000 / (count * count))));
+    const hot = Math.floor(budget * 0.6);
+    alpha = warmth;
+    alphaTarget = warmth;
+    settled = false;
+    for (let i = 0; i < budget && !settled; i++) {
+      if (i === hot) {
+        alphaTarget = 0;
+      }
       step();
     }
-    settled = false; // Let the visible frames polish the last of it.
+    rest();
   }
 
   /** Faint links between notes that share a file or a hashtag. */
@@ -187,6 +223,7 @@
     if (settled && !dragging) {
       return;
     }
+    alpha += (alphaTarget - alpha) * ALPHA_DECAY;
     const width = canvas.clientWidth || 800;
     const height = canvas.clientHeight || 600;
     const springs = edges.concat(groupEdges());
@@ -203,7 +240,7 @@
           dy = Math.random() - 0.5;
           distanceSq = 0.01;
         }
-        const force = 9000 / distanceSq;
+        const force = (9000 / distanceSq) * alpha;
         const distance = Math.sqrt(distanceSq);
         const fx = (dx / distance) * force;
         const fy = (dy / distance) * force;
@@ -218,9 +255,9 @@
       const dx = edge.to.x - edge.from.x;
       const dy = edge.to.y - edge.from.y;
       const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
-      const rest = edge.kind === 'ref' ? 130 : 90;
+      const restLength = edge.kind === 'ref' ? 130 : 90;
       const stiffness = edge.kind === 'ref' ? 0.02 : 0.008;
-      const force = (distance - rest) * stiffness;
+      const force = (distance - restLength) * stiffness * alpha;
       const fx = (dx / distance) * force;
       const fy = (dy / distance) * force;
       edge.from.vx += fx;
@@ -230,8 +267,8 @@
     }
 
     for (const node of nodes) {
-      node.vx += (width / 2 - node.x) * 0.0015;
-      node.vy += (height / 2 - node.y) * 0.0015;
+      node.vx += (width / 2 - node.x) * 0.0015 * alpha;
+      node.vy += (height / 2 - node.y) * 0.0015 * alpha;
       if (dragging === node) {
         node.vx = 0;
         node.vy = 0;
@@ -243,15 +280,12 @@
       node.y += Math.max(Math.min(node.vy, 12), -12);
     }
 
-    if (!dragging) {
-      let motion = 0;
-      for (const node of nodes) {
-        motion += Math.abs(node.vx) + Math.abs(node.vy);
-      }
-      if (nodes.length === 0 || motion / nodes.length < 0.08) {
-        settled = true;
-        saveStateSoon();
-      }
+    // Cold enough to be finished, or nothing to simulate: stop outright. The
+    // schedule decides this, so settling always takes the same short time
+    // whatever the layout was doing.
+    if (!dragging && (alpha <= ALPHA_MIN || nodes.length === 0)) {
+      rest();
+      saveStateSoon();
     }
   }
 
@@ -374,9 +408,13 @@
   function frame() {
     if (resize() && nodes.length > 0 && !restoredLayout) {
       recentre();
-      unsettle();
+      unsettle(0.4);
     }
-    step();
+    // Several steps a frame: the anneal is measured in steps, so this is what
+    // turns a ~50-step settle into ~200ms rather than most of a second.
+    for (let i = 0; i < STEPS_PER_FRAME; i++) {
+      step();
+    }
     draw();
     report();
     requestAnimationFrame(frame);
@@ -435,7 +473,11 @@
     const node = nodeAt(point);
     if (node) {
       dragging = node;
-      unsettle();
+      // Held warm for as long as you hold the node, so its neighbours keep
+      // making room; released, it cools to a stop in a couple of hundred ms.
+      alpha = DRAG_ALPHA;
+      alphaTarget = DRAG_ALPHA;
+      settled = false;
     } else {
       panning = { x: e.clientX - view.x, y: e.clientY - view.y };
       canvas.classList.add('dragging');
@@ -487,6 +529,7 @@
     if (dragging || panning) {
       saveStateSoon();
     }
+    alphaTarget = 0;
     dragging = null;
     panning = null;
     canvas.classList.remove('dragging');
