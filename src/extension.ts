@@ -78,8 +78,16 @@ export function activate(context: vscode.ExtensionContext): void {
       const character = Math.min(note.character, document.lineAt(line).range.end.character);
       // Land the cursor exactly where the note was made, not just on the line.
       const anchor = new vscode.Position(line, character);
+      // If the file is already open somewhere, show it there. Forcing a column
+      // would move the user's editor out from under them.
+      const openIn = vscode.window.tabGroups.all.find((group) =>
+        group.tabs.some(
+          (tab) =>
+            (tab.input as { uri?: vscode.Uri } | undefined)?.uri?.toString() === uri.toString()
+        )
+      )?.viewColumn;
       const editor = await vscode.window.showTextDocument(document, {
-        viewColumn: vscode.ViewColumn.One,
+        viewColumn: openIn ?? vscode.ViewColumn.One,
         selection: new vscode.Selection(anchor, anchor)
       });
       editor.revealRange(
