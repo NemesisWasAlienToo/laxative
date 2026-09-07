@@ -61,6 +61,12 @@ now takes about a fifth of a second.
 
 To check what is installed: `code --list-extensions --show-versions | grep laxative`.
 
+If the install prints a `DEP0169 DeprecationWarning` about `url.parse()`,
+ignore it: that is VS Code's own CLI talking to itself under a newer Node, not
+this extension — the line above it, `was successfully installed`, is the one
+that matters. Nothing in the packaged extension uses `url.parse`, or any Node
+built-in at all.
+
 **Uninstalling:** `code --uninstall-extension local.laxative`, or from the
 Extensions view. Your `.laxative/notes.json` stays where it is.
 
