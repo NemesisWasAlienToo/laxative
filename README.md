@@ -207,7 +207,11 @@ a scratch dir inside the container. Downloaded VS Code builds are cached in the
 
 The default runs the **real desktop VS Code build** — the same one the tests use
 — on a virtual display, reachable in your browser over noVNC, with the extension
-installed and a sample git project to annotate. Nothing is written outside a
+installed and a sample git project to annotate. The sample comes with six notes
+already attached, chosen so every visual is on screen at once — three files, a
+well-connected hub note, an untagged one, a nested tag, a code fence to render
+and one deliberately dangling reference — and its README is a short checklist of
+what to look at. Nothing stops you adding your own on top. Nothing is written outside a
 temp directory and your local VS Code is untouched. `Ctrl+C` stops and deletes
 the sandbox.
 
