@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2
+
+- Fixed the reading panel jumping to a new editor column each time a note was
+  opened. It was revealed "beside" whatever had focus, which moved it and
+  resized every other group; it now stays in the column it is already in.
+- Fixed each edited note splitting the editor area again. Note editors now
+  share one group, so only the first one splits.
+- Revealing a note no longer drags the file into the first column when it is
+  already open in another group.
+
 ## 0.6.1
 
 - The graph no longer replays its whole layout animation every time the panel is

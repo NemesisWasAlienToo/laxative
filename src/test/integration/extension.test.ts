@@ -649,4 +649,106 @@ describe('Laxative extension', function () {
       assert.strictEqual(vscode.window.visibleTextEditors.length, 0);
     });
   });
+
+  describe('editor layout', () => {
+    const groupCount = () => vscode.window.tabGroups.all.length;
+    const columnOf = (predicate: (uri: vscode.Uri) => boolean) =>
+      vscode.window.tabGroups.all.find((group) =>
+        group.tabs.some((tab) => {
+          const uri = (tab.input as { uri?: vscode.Uri } | undefined)?.uri;
+          return uri ? predicate(uri) : false;
+        })
+      )?.viewColumn;
+
+    const openCode = async (line = 1) => {
+      const document = await vscode.workspace.openTextDocument(appUri());
+      const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
+      editor.selection = new vscode.Selection(line, 0, line, 0);
+      return editor;
+    };
+
+    it('keeps the reading panel in one column instead of moving it around', async () => {
+      await writeStore([makeNote({ id: 'first001' }), makeNote({ id: 'second02', line: 6 })]);
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await openCode();
+      await vscode.commands.executeCommand('laxative.openNote', 'first001');
+
+      const panelTab = () =>
+        vscode.window.tabGroups.all
+          .flatMap((group) => group.tabs.map((tab) => ({ tab, group })))
+          .find(({ tab }) => tab.input instanceof vscode.TabInputWebview);
+      const before = await waitFor(() => panelTab()?.group.viewColumn, 'the reading panel');
+
+      // Put the focus in a group to the *right* of the panel. Revealing the
+      // panel "beside" the focus used to shunt it into yet another column,
+      // resizing every group in the window.
+      await vscode.window.showTextDocument(
+        await vscode.workspace.openTextDocument(appUri()),
+        vscode.ViewColumn.Three
+      );
+      const groupsBefore = groupCount();
+
+      await vscode.commands.executeCommand('laxative.openNote', 'second02');
+      await settle();
+
+      assert.strictEqual(panelTab()?.group.viewColumn, before, 'panel did not change column');
+      assert.strictEqual(groupCount(), groupsBefore, 'no extra editor group appeared');
+    });
+
+    it('does not split the editor again for every note edited', async () => {
+      await writeStore([
+        makeNote({ id: 'aaa00001', body: 'First note' }),
+        makeNote({ id: 'bbb00002', body: 'Second note', line: 6 })
+      ]);
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await openCode();
+
+      await vscode.commands.executeCommand('laxative.editNote', 'aaa00001');
+      await waitFor(
+        () => vscode.window.visibleTextEditors.find((e) => e.document.uri.scheme === 'laxative'),
+        'the first note editor'
+      );
+      const groupsAfterFirst = groupCount();
+      const noteColumn = columnOf((uri) => uri.scheme === 'laxative');
+
+      // The note editor is focused now; opening another note used to split
+      // beside *it*, adding a third column and resizing everything.
+      await vscode.commands.executeCommand('laxative.editNote', 'bbb00002');
+      await waitFor(
+        () =>
+          vscode.window.visibleTextEditors.find(
+            (e) => e.document.uri.scheme === 'laxative' && e.document.uri.authority === 'bbb00002'
+          ),
+        'the second note editor'
+      );
+
+      assert.strictEqual(groupCount(), groupsAfterFirst, 'still the same number of groups');
+      assert.strictEqual(
+        columnOf((uri) => uri.scheme === 'laxative'),
+        noteColumn,
+        'notes share one column'
+      );
+    });
+
+    it('reveals code in the group it is already open in', async () => {
+      await writeStore([makeNote({ line: 6, character: 2 })]);
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      // Deliberately put the file somewhere other than column one.
+      const document = await vscode.workspace.openTextDocument(appUri());
+      await vscode.window.showTextDocument(document, vscode.ViewColumn.Two);
+      const before = columnOf((uri) => uri.fsPath === appUri().fsPath);
+      const groupsBefore = groupCount();
+
+      await vscode.commands.executeCommand('laxative.revealNote', 'note0001');
+      await settle();
+
+      assert.strictEqual(
+        columnOf((uri) => uri.fsPath === appUri().fsPath),
+        before,
+        'the file stayed in the group the user had it in'
+      );
+      assert.strictEqual(groupCount(), groupsBefore, 'no group was added or removed');
+      assert.strictEqual(vscode.window.activeTextEditor?.selection.active.line, 6);
+    });
+  });
 });

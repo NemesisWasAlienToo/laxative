@@ -56,11 +56,30 @@ export class NoteDocuments implements vscode.FileSystemProvider, vscode.Disposab
   }
 
   /** An already-open editor for this note, whatever name its tab was given. */
-  private static openUriFor(id: string): vscode.Uri | undefined {
+  private static openTabFor(id: string): vscode.Tab | undefined {
     return vscode.window.tabGroups.all
       .flatMap((group) => group.tabs)
-      .map((tab) => (tab.input as { uri?: vscode.Uri } | undefined)?.uri)
-      .find((uri) => uri?.scheme === NOTE_SCHEME && uri.authority === id);
+      .find((tab) => {
+        const uri = (tab.input as { uri?: vscode.Uri } | undefined)?.uri;
+        return uri?.scheme === NOTE_SCHEME && uri.authority === id;
+      });
+  }
+
+  /**
+   * Where a note editor should open. Notes share whichever group already holds
+   * one, so editing note after note never keeps splitting the editor area and
+   * resizing everything else; only the first one splits.
+   */
+  private static columnForNotes(): vscode.ViewColumn {
+    for (const group of vscode.window.tabGroups.all) {
+      const holdsNote = group.tabs.some(
+        (tab) => (tab.input as { uri?: vscode.Uri } | undefined)?.uri?.scheme === NOTE_SCHEME
+      );
+      if (holdsNote) {
+        return group.viewColumn;
+      }
+    }
+    return vscode.ViewColumn.Beside;
   }
 
   /**
@@ -69,11 +88,14 @@ export class NoteDocuments implements vscode.FileSystemProvider, vscode.Disposab
    * behind the user's back: its name is settled when the note is opened.
    */
   static async open(note: Note): Promise<vscode.TextEditor | undefined> {
-    const uri = NoteDocuments.openUriFor(note.id) ?? NoteDocuments.uriFor(note);
+    const existing = NoteDocuments.openTabFor(note.id);
+    const uri =
+      (existing?.input as { uri?: vscode.Uri } | undefined)?.uri ?? NoteDocuments.uriFor(note);
+    const viewColumn = existing ? existing.group.viewColumn : NoteDocuments.columnForNotes();
     try {
       const document = await vscode.workspace.openTextDocument(uri);
       return await vscode.window.showTextDocument(document, {
-        viewColumn: vscode.ViewColumn.Beside,
+        viewColumn,
         preview: false
       });
     } catch (err) {

@@ -82,17 +82,19 @@ export class NotePanel {
       void vscode.window.showWarningMessage(`Laxative: note "${noteId}" no longer exists.`);
       return undefined;
     }
-    const column = vscode.ViewColumn.Beside;
     if (NotePanel.current) {
       NotePanel.current.noteId = noteId;
-      NotePanel.current.panel.reveal(column, true);
+      // Reveal where it already is. Passing a column here would *move* the
+      // panel next to whatever happens to be focused, re-splitting the editor
+      // area and resizing every other group.
+      NotePanel.current.panel.reveal(NotePanel.current.panel.viewColumn, true);
       NotePanel.current.push();
       return NotePanel.current;
     }
     const panel = vscode.window.createWebviewPanel(
       'laxative.note',
       'Note',
-      { viewColumn: column, preserveFocus: true },
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       {
         enableScripts: true,
         retainContextWhenHidden: true,
