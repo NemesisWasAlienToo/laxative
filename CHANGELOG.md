@@ -9,6 +9,11 @@
   slowed down?" test for being finished stayed false while the layout crawled.
 - A dragged node now stays roughly where it is dropped, and the whole opening
   layout is computed before the first frame, so nothing is ever drawn mid-slide.
+- The try-it sandbox now opens with six notes already attached to its sample
+  project, so the gutter markers, the reading panel, both groupings and the
+  graph can all be checked at a glance instead of being typed in first. Unit
+  tests check that seed against the extension's own parser, including that each
+  note still sits on the line of code it talks about.
 
 ## 0.6.2
 
