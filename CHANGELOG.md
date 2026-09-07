@@ -15,6 +15,9 @@
   tests check that seed against the extension's own parser, including that each
   note still sits on the line of code it talks about.
 
+- The README now covers upgrading an installed copy, and spells out that notes
+  live in the workspace and so survive an upgrade or an uninstall.
+
 ## 0.6.2
 
 - Fixed the reading panel jumping to a new editor column each time a note was

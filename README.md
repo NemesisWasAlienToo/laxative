@@ -32,16 +32,37 @@ minutes; later ones are cached.
 Prefer the UI? Extensions view → `...` → **Install from VSIX…** → pick
 `dist/laxative.vsix`.
 
-**Updating after a `git pull`:** the version number will not have changed, so
-tell VS Code to replace it:
+## Upgrading
 
 ```bash
-./docker/test.sh package
+git pull
+./docker/test.sh package                            # rebuild dist/laxative.vsix
 code --install-extension dist/laxative.vsix --force
 ```
 
+Then **Developer: Reload Window** (`Ctrl+Shift+P`). VS Code loads an extension
+once per window, so until you reload you are still running the old code.
+
+`--force` is what makes this work: the version in `package.json` does not change
+between local builds, and without it VS Code sees a version it already has and
+does nothing. There is no need to uninstall first, and no need to close your
+editor.
+
+**Your notes are not touched by an upgrade.** They live in your workspace, in
+`.laxative/notes.json` (or wherever `laxative.storeFile` points), which is a
+file in your project like any other — it is not stored inside the extension.
+Uninstalling the extension does not delete it either; the notes simply stop
+being displayed until you install again. The same goes for your settings and
+your keybindings, which live in your VS Code profile.
+
+The one thing that does not survive is the graph's remembered layout, which is
+held by the panel itself: after a reload the graph lays itself out again, which
+now takes about a fifth of a second.
+
+To check what is installed: `code --list-extensions --show-versions | grep laxative`.
+
 **Uninstalling:** `code --uninstall-extension local.laxative`, or from the
-Extensions view.
+Extensions view. Your `.laxative/notes.json` stays where it is.
 
 ## What it does
 
