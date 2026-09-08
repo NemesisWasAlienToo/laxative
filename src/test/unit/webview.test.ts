@@ -414,10 +414,10 @@ describe('graph webview', () => {
     assert.ok(fromDrop < 60, `stays roughly where it was put (drifted ${fromDrop.toFixed(0)}px)`);
   });
 
-  it('stops the layout while a held node is kept still', async () => {
-    // Warmth used to be held for as long as the mouse button was down, so
-    // grabbing a node and holding it left everything else drifting until the
-    // button came up.
+  it('keeps the layout live while a node is held, so grabbing one wakes it up', async () => {
+    // Holding a node is how you rouse a settled graph and let it rearrange
+    // itself around where you are putting things, so the simulation runs for
+    // as long as the button is down, whether or not the mouse is moving.
     harness = load(
       'graph.js',
       HTML,
@@ -427,31 +427,25 @@ describe('graph webview', () => {
     await delay(150);
 
     const canvas = harness.window.document.getElementById('canvas');
-    const at = (x: number, y: number) => ({ clientX: x, clientY: y, bubbles: true });
     const mouse = (target: any, type: string, x: number, y: number) =>
-      target.dispatchEvent(new harness.window.MouseEvent(type, at(x, y)));
-    // The second node: the one that should stop moving, not the held one.
-    const other = () => harness.window.__context.arcs.at(-1).slice(0, 2) as number[];
+      target.dispatchEvent(new harness.window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    const drawn = () => {
+      const arcs = harness.window.__context.arcs.slice(-2);
+      return { held: arcs[0].slice(0, 2) as number[], other: arcs[1].slice(0, 2) as number[] };
+    };
 
-    const [firstX, firstY] = harness.window.__context.arcs.at(-2).slice(0, 2) as number[];
-    mouse(canvas, 'mousedown', firstX, firstY);
-    mouse(harness.window, 'mousemove', 180, 480);
+    const before = drawn();
+    // One movement, dragging the note well away from its neighbour, and then
+    // the mouse is kept perfectly still with the button still down.
+    mouse(canvas, 'mousedown', before.held[0], before.held[1]);
+    mouse(harness.window, 'mousemove', 120, 110);
+    await delay(500);
 
-    // Button still down for the whole of this: no mouseup anywhere.
-    await delay(250);
-    const held = other();
-    await delay(400);
-    const stillHeld = other();
-
-    // Exact equality on purpose. A layout that is merely converging is still
-    // running, still burning a frame's work, and still visibly creeping; the
-    // guarantee is that it comes to a full stop while the button is down.
-    assert.deepStrictEqual(
-      stillHeld,
-      held,
-      `everything is frozen while the node is held (it drifted ` +
-        `${Math.hypot(held[0] - stillHeld[0], held[1] - stillHeld[1]).toFixed(4)}px)`
-    );
+    const after = drawn();
+    const followed = Math.hypot(after.other[0] - before.other[0], after.other[1] - before.other[1]);
+    const gap = Math.hypot(after.other[0] - after.held[0], after.other[1] - after.held[1]);
+    assert.ok(followed > 50, `the neighbour keeps moving while the node is held (${followed.toFixed(0)}px)`);
+    assert.ok(gap < 220, `and settles near it rather than being left behind (${gap.toFixed(0)}px away)`);
   });
 
   it('can turn off the hover card that covers what you are looking at', async () => {
@@ -554,6 +548,67 @@ describe('graph webview', () => {
     assert.ok(
       Math.max(...spread) < 250,
       `Tidy brings them back to the middle (furthest ${Math.max(...spread).toFixed(0)}px out)`
+    );
+  });
+
+  it('does not scatter a little further every time it is disturbed', async () => {
+    // Once hand-arranging switches the centre pull off, repulsion is the only
+    // long-range force left, and 1/d^2 never quite reaches zero: without a
+    // range limit the notes drifted further apart on every re-settle, so the
+    // graph slowly blew itself apart as you worked with it.
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+    );
+    // No references, no shared file, no shared tag: nothing but repulsion.
+    harness.send({
+      type: 'graph',
+      nodes: ['a', 'b', 'c', 'd', 'e'].map((id, i) => ({
+        id,
+        title: id.toUpperCase(),
+        file: `src/${id}.ts`,
+        line: i,
+        tags: [],
+        excerpt: ''
+      })),
+      edges: [],
+      broken: []
+    });
+    await delay(150);
+
+    const spread = () => {
+      const points = harness.window.__context.arcs.slice(-5).map((a: any) => [a[0], a[1]]);
+      let widest = 0;
+      for (let i = 0; i < points.length; i++) {
+        for (let j = i + 1; j < points.length; j++) {
+          widest = Math.max(widest, Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1]));
+        }
+      }
+      return widest;
+    };
+
+    // Arrange one by hand, which is what turns the centre pull off.
+    const canvas = harness.window.document.getElementById('canvas');
+    const grabbed = harness.window.__context.arcs.at(-1).slice(0, 2) as number[];
+    const mouse = (target: any, type: string, x: number, y: number) =>
+      target.dispatchEvent(new harness.window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    mouse(canvas, 'mousedown', grabbed[0], grabbed[1]);
+    mouse(harness.window, 'mousemove', 420, 330);
+    mouse(harness.window, 'mouseup', 420, 330);
+    await delay(200);
+
+    const before = spread();
+    const showTags = harness.window.document.getElementById('showTags');
+    for (let i = 0; i < 8; i++) {
+      showTags.checked = !showTags.checked;
+      showTags.dispatchEvent(new harness.window.Event('change'));
+      await delay(110);
+    }
+    const after = spread();
+    assert.ok(
+      after < before * 1.15,
+      `the layout holds its size through repeated re-settles (${before.toFixed(0)}px -> ${after.toFixed(0)}px)`
     );
   });
 

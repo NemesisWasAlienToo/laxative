@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.5
+
+- Holding a node keeps the graph moving again, so grabbing one is once more how
+  you wake a settled layout up. 0.6.4 tied the simulation to pointer movement
+  instead, which meant a selected but motionless node froze everything.
+- Fixed the graph scattering itself apart as you worked with it. Repulsion falls
+  off as 1/d^2 but never reaches zero, so with the centre pull switched off by
+  hand-arranging there was nothing to balance it and the notes drifted further
+  apart on every re-settle. Repulsion now has a range, past which two notes
+  ignore each other, and an arranged graph holds each note gently at the spot
+  you left it in rather than at the centre of the canvas.
+
 ## 0.6.4
 
 - Holding a node still no longer keeps the rest of the graph drifting. The
