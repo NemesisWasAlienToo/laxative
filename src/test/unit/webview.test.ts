@@ -171,6 +171,8 @@ describe('graph webview', () => {
       <input id="filter" type="text">
       <label><input id="showFiles" type="checkbox" checked></label>
       <label><input id="showTags" type="checkbox" checked></label>
+      <label><input id="showTip" type="checkbox" checked></label>
+      <button id="tidy" type="button">Tidy</button>
       <span id="stats"></span>
     </div>
     <canvas id="canvas"></canvas>
@@ -410,6 +412,149 @@ describe('graph webview', () => {
     assert.ok(drift < 1, `at rest 250ms after the drop (still moved ${drift.toFixed(2)}px)`);
     const fromDrop = Math.hypot(settledAt[0] - 700, settledAt[1] - 90);
     assert.ok(fromDrop < 60, `stays roughly where it was put (drifted ${fromDrop.toFixed(0)}px)`);
+  });
+
+  it('stops the layout while a held node is kept still', async () => {
+    // Warmth used to be held for as long as the mouse button was down, so
+    // grabbing a node and holding it left everything else drifting until the
+    // button came up.
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+    );
+    harness.send(graph);
+    await delay(150);
+
+    const canvas = harness.window.document.getElementById('canvas');
+    const at = (x: number, y: number) => ({ clientX: x, clientY: y, bubbles: true });
+    const mouse = (target: any, type: string, x: number, y: number) =>
+      target.dispatchEvent(new harness.window.MouseEvent(type, at(x, y)));
+    // The second node: the one that should stop moving, not the held one.
+    const other = () => harness.window.__context.arcs.at(-1).slice(0, 2) as number[];
+
+    const [firstX, firstY] = harness.window.__context.arcs.at(-2).slice(0, 2) as number[];
+    mouse(canvas, 'mousedown', firstX, firstY);
+    mouse(harness.window, 'mousemove', 180, 480);
+
+    // Button still down for the whole of this: no mouseup anywhere.
+    await delay(250);
+    const held = other();
+    await delay(400);
+    const stillHeld = other();
+
+    // Exact equality on purpose. A layout that is merely converging is still
+    // running, still burning a frame's work, and still visibly creeping; the
+    // guarantee is that it comes to a full stop while the button is down.
+    assert.deepStrictEqual(
+      stillHeld,
+      held,
+      `everything is frozen while the node is held (it drifted ` +
+        `${Math.hypot(held[0] - stillHeld[0], held[1] - stillHeld[1]).toFixed(4)}px)`
+    );
+  });
+
+  it('can turn off the hover card that covers what you are looking at', async () => {
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+    );
+    harness.send(graph);
+    await delay(150);
+
+    const tip = harness.window.document.getElementById('tip');
+    const toggle = harness.window.document.getElementById('showTip');
+    const [x, y] = harness.window.__context.arcs.at(-1).slice(0, 2) as number[];
+    const hover = (px: number, py: number) =>
+      harness.window.dispatchEvent(
+        new harness.window.MouseEvent('mousemove', { clientX: px, clientY: py, bubbles: true })
+      );
+
+    hover(x, y);
+    assert.strictEqual(tip.hidden, false, 'the hover card shows by default');
+    // arcs are painted in node order, so the last one is the second note.
+    assert.ok(tip.textContent.includes('Second'), 'and describes the note under the pointer');
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new harness.window.Event('change'));
+    assert.strictEqual(tip.hidden, true, 'unticking it hides the card at once');
+
+    hover(400, 300);
+    hover(x, y);
+    assert.strictEqual(tip.hidden, true, 'and hovering a node no longer brings it back');
+
+    await delay(300); // persisting is debounced
+    assert.strictEqual(harness.state.current.tooltips, false, 'the choice is remembered');
+  });
+
+  it('lets a cluster be parked off to one side, and tidied back', async () => {
+    // Every node was pulled towards the middle of the canvas, so dragging one
+    // note into a corner left its neighbours behind, halfway back to the
+    // centre: you could not hold two groups apart.
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+    );
+    harness.send(graph);
+    await delay(150);
+
+    const canvas = harness.window.document.getElementById('canvas');
+    const mouse = (target: any, type: string, x: number, y: number) =>
+      target.dispatchEvent(new harness.window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    const drawn = () => {
+      const arcs = harness.window.__context.arcs.slice(-2);
+      return { first: arcs[0].slice(0, 2) as number[], second: arcs[1].slice(0, 2) as number[] };
+    };
+
+    // Drag the first note into the top-left corner and let go.
+    const [grabX, grabY] = drawn().first;
+    mouse(canvas, 'mousedown', grabX, grabY);
+    // Spread over frames, the way a real drag is: the physics only runs on
+    // animation frames, so moves dispatched back to back would be one step.
+    for (const [x, y] of [[600, 380], [500, 300], [380, 230], [240, 150], [110, 90]]) {
+      mouse(harness.window, 'mousemove', x, y);
+      await delay(50);
+    }
+    mouse(harness.window, 'mouseup', 110, 90);
+    await delay(500);
+
+    const centre = [400, 300];
+    const parked = drawn().first;
+    assert.ok(
+      Math.hypot(parked[0] - 110, parked[1] - 90) < 60,
+      `the note stays in the corner it was put in (at ${parked.map(Math.round)})`
+    );
+
+    // Every later disturbance used to claw it back towards the middle a little
+    // more, so an arrangement never survived being touched.
+    const showFiles = harness.window.document.getElementById('showFiles');
+    for (let i = 0; i < 6; i++) {
+      showFiles.checked = !showFiles.checked;
+      showFiles.dispatchEvent(new harness.window.Event('change'));
+      await delay(120);
+    }
+    const after = drawn().first;
+    const crept = Math.hypot(after[0] - parked[0], after[1] - parked[1]);
+    assert.ok(
+      crept < 40,
+      `it stays parked through later re-settles (it crept ${crept.toFixed(0)}px back)`
+    );
+
+    // Tidy hands the layout back to the simulation.
+    harness.window.document.getElementById('tidy').dispatchEvent(
+      new harness.window.MouseEvent('click', { bubbles: true })
+    );
+    await delay(200);
+    const tidied = drawn();
+    const spread = [tidied.first, tidied.second].map((p) =>
+      Math.hypot(p[0] - centre[0], p[1] - centre[1])
+    );
+    assert.ok(
+      Math.max(...spread) < 250,
+      `Tidy brings them back to the middle (furthest ${Math.max(...spread).toFixed(0)}px out)`
+    );
   });
 
   it('remembers its layout so reopening the panel does not re-animate', async () => {

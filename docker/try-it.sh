@@ -205,7 +205,13 @@ them there.
    - *Race with the cache warmer* is the biggest node - it has four links;
    - solid arrows are `[[refs]]`, faint dashes join notes sharing a file or tag;
    - **drag a node anywhere and let go**: it stays where you dropped it and
-     everything stops moving in about a fifth of a second;
+     everything stops moving in about a fifth of a second. Hold one still
+     without letting go: everything settles around it rather than drifting;
+   - drag one cluster off to a corner: it is left there, because moving a note
+     by hand switches off the pull towards the middle. **Tidy** puts the
+     automatic layout back;
+   - untick **hover details** if the hover card is in the way; hovering still
+     highlights a note's neighbours;
    - close the panel and reopen it: same layout, no animation at all;
    - type in the filter box: notes that do not match disappear rather than fade;
    - **double-click** a node to open it - a single drag must never open one.

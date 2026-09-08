@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.4
+
+- Holding a node still no longer keeps the rest of the graph drifting. The
+  layout was kept warm for as long as the mouse button was down; it is now kept
+  warm by the movement itself, so a held-but-still node lets everything settle
+  within about 120ms, while dragging one still pulls its neighbours along.
+- Settling is faster again across the board (about 6 frames rather than 12).
+- Moving a note by hand switches off the pull towards the centre of the canvas,
+  which used to drag every cluster back to the middle and made it impossible to
+  hold two groups apart. A **Tidy** button in the graph toolbar hands the layout
+  back to the simulation when you want it arranged automatically again.
+- New notes are now seeded next to the notes already on screen rather than at
+  the centre of the canvas, which could be nowhere near them.
+- Bigger, notched arrowheads, so which way a reference points is readable at a
+  glance.
+- The hover card can be turned off with a **hover details** checkbox next to the
+  other two, for when it sits on top of what you are trying to see. Hovering
+  still highlights a note's neighbours.
+
 ## 0.6.3
 
 - The graph layout now cools on a fixed schedule instead of running until the
