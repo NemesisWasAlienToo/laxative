@@ -42,12 +42,23 @@
   const ALPHA_MIN = 0.02;      // colder than this and the layout is done
   const ALPHA_DECAY = 0.11;    // 1 -> ALPHA_MIN in ~34 steps
   const STEPS_PER_FRAME = 6;   // so those steps take ~6 frames, not ~34
-  const DRAG_ALPHA = 0.3;      // how hard the rest reacts to a node being moved
-  const DRAG_GRACE = 120;      // ms of stillness before a held node stops leading
+  const DRAG_ALPHA = 0.3;      // how hard the rest reacts to a node being held
+  // Repulsion falls off as 1/d^2 but never reaches zero, so across a whole
+  // graph the far-away notes still add up to a real outward push. With the
+  // centre pull switched off -- which is what hand-arranging does -- nothing
+  // balances that, and the layout expands a little more every time it is
+  // disturbed. Past this range two notes simply ignore each other, which gives
+  // the layout an equilibrium to settle at and lets two parked clusters be
+  // genuinely independent of one another.
+  const REPEL_RANGE_SQ = 320 * 320;
+  // ...and, once you have arranged the graph yourself, each note is held
+  // gently at the spot it last came to rest in. That is what replaces the pull
+  // towards the middle: the layout keeps its shape and its size wherever you
+  // have put it, instead of either creeping back to the centre or drifting
+  // apart, while still being free to move locally when something changes.
+  const HOME_PULL = 0.03;
   let alpha = 0;
   let alphaTarget = 0;
-  /** When the node being held last actually moved. */
-  let movedAt = 0;
   /** True when every node came back from a previous session at its old spot. */
   let restoredLayout = false;
   /** Set the moment you move a note by hand. The pull towards the middle is
@@ -87,6 +98,20 @@
   function saveStateSoon() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveState, 250);
+  }
+
+  /**
+   * Records where the notes belong. Deliberately *not* done every time the
+   * layout stops: if home followed each settle, a nudge outwards would become
+   * the new home and the next nudge would start from there, so the graph would
+   * ratchet itself apart. Home moves only when you move a note, or when the
+   * automatic layout has just decided the whole arrangement.
+   */
+  function anchor() {
+    for (const node of nodes) {
+      node.hx = node.x;
+      node.hy = node.y;
+    }
   }
 
   /** Something changed: warm the layout back up so it re-settles, then stops. */
@@ -154,7 +179,7 @@
         x = seed[0] + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40;
         y = seed[1] + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40;
       }
-      return { ...n, x, y, vx: 0, vy: 0, degree: 0 };
+      return { ...n, x, y, hx: x, hy: y, vx: 0, vy: 0, degree: 0 };
     });
     const byId = new Map(nodes.map((n) => [n.id, n]));
     edges = [];
@@ -171,6 +196,7 @@
     if (restoredLayout) {
       // Every note is where it was left: show that, do not animate to it.
       rest();
+      anchor();
     } else {
       // A layout with some notes already placed only needs room made for the
       // new ones, so it starts warm rather than hot and barely disturbs the
@@ -213,6 +239,7 @@
       step();
     }
     rest();
+    anchor();
   }
 
   /** Faint links between notes that share a file or a hashtag. */
@@ -248,11 +275,10 @@
     if (settled) {
       return;
     }
-    // A node being actively moved keeps the layout warm, so its neighbours are
-    // pulled along with it for as long as it is going somewhere. Keyed to the
-    // last movement rather than to the button being down: hold it still and
-    // everything settles, whether or not you have let go yet.
-    if (dragging && Date.now() - movedAt < DRAG_GRACE) {
+    // Holding a node keeps the layout warm, so grabbing one is also how you
+    // wake a settled graph up and let it rearrange itself around where you are
+    // putting things. It cools to a stop as soon as you let go.
+    if (dragging) {
       alpha = Math.max(alpha, DRAG_ALPHA);
     }
     alpha += (alphaTarget - alpha) * ALPHA_DECAY;
@@ -267,6 +293,9 @@
         let dx = b.x - a.x;
         let dy = b.y - a.y;
         let distanceSq = dx * dx + dy * dy;
+        if (distanceSq > REPEL_RANGE_SQ) {
+          continue;
+        }
         if (distanceSq < 0.01) {
           dx = Math.random() - 0.5;
           dy = Math.random() - 0.5;
@@ -299,7 +328,10 @@
     }
 
     for (const node of nodes) {
-      if (!arranged) {
+      if (arranged) {
+        node.vx += (node.hx - node.x) * HOME_PULL * alpha;
+        node.vy += (node.hy - node.y) * HOME_PULL * alpha;
+      } else {
         node.vx += (width / 2 - node.x) * 0.0015 * alpha;
         node.vy += (height / 2 - node.y) * 0.0015 * alpha;
       }
@@ -487,6 +519,8 @@
     for (const node of nodes) {
       node.x += dx;
       node.y += dy;
+      node.hx += dx;
+      node.hy += dy;
     }
   }
 
@@ -516,9 +550,12 @@
     const node = nodeAt(point);
     if (node) {
       dragging = node;
-      // You are arranging it yourself now, so stop pulling it to the middle.
-      arranged = true;
-      movedAt = Date.now();
+      // You are arranging it yourself now, so stop pulling everything to the
+      // middle and hold each note where it currently sits instead.
+      if (!arranged) {
+        arranged = true;
+        anchor();
+      }
       unsettle(DRAG_ALPHA);
     } else {
       panning = { x: e.clientX - view.x, y: e.clientY - view.y };
@@ -531,9 +568,9 @@
     if (dragging) {
       dragging.x = point.x;
       dragging.y = point.y;
-      // Warmed by the movement itself rather than held warm by the button
-      // being down: hold a node still and everything stops around it.
-      movedAt = Date.now();
+      // Where you are putting it is where it now belongs.
+      dragging.hx = point.x;
+      dragging.hy = point.y;
       unsettle(DRAG_ALPHA);
       return;
     }
