@@ -73,6 +73,8 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
   <input id="filter" type="text" placeholder="Filter notes...">
   <label><input id="showFiles" type="checkbox" checked> link same file</label>
   <label><input id="showTags" type="checkbox" checked> link same hashtag</label>
+  <label><input id="showTip" type="checkbox" checked> hover details</label>
+  <button id="tidy" type="button" title="Lay the notes out automatically again">Tidy</button>
   <span id="stats"></span>
 </div>
 <canvas id="canvas"></canvas>

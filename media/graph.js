@@ -9,6 +9,8 @@
   const filterInput = /** @type {HTMLInputElement} */ (document.getElementById('filter'));
   const showFiles = /** @type {HTMLInputElement} */ (document.getElementById('showFiles'));
   const showTags = /** @type {HTMLInputElement} */ (document.getElementById('showTags'));
+  const showTip = /** @type {HTMLInputElement} */ (document.getElementById('showTip'));
+  const tidy = /** @type {HTMLButtonElement} */ (document.getElementById('tidy'));
   const stats = document.getElementById('stats');
 
   const PALETTE = [
@@ -25,6 +27,9 @@
   let query = '';
   let groupByFile = true;
   let groupByTag = true;
+  /** The hover card is useful until it is sitting on top of what you want to
+   *  see, so it can be switched off without losing the hover highlight. */
+  let tooltips = true;
   /** True once motion has died down; the simulation then stops until something
    *  disturbs it, so a settled graph costs nothing and never jitters. */
   let settled = false;
@@ -35,13 +40,21 @@
   // far from the middle crept towards it for seconds, because the centre pull
   // is constant and the old stop condition only watched for slow velocities.
   const ALPHA_MIN = 0.02;      // colder than this and the layout is done
-  const ALPHA_DECAY = 0.08;    // 1 -> ALPHA_MIN in ~47 steps
-  const STEPS_PER_FRAME = 4;   // so those steps take ~12 frames, not ~47
-  const DRAG_ALPHA = 0.35;     // how hard the rest reacts while you drag one
+  const ALPHA_DECAY = 0.11;    // 1 -> ALPHA_MIN in ~34 steps
+  const STEPS_PER_FRAME = 6;   // so those steps take ~6 frames, not ~34
+  const DRAG_ALPHA = 0.3;      // how hard the rest reacts to a node being moved
+  const DRAG_GRACE = 120;      // ms of stillness before a held node stops leading
   let alpha = 0;
   let alphaTarget = 0;
+  /** When the node being held last actually moved. */
+  let movedAt = 0;
   /** True when every node came back from a previous session at its old spot. */
   let restoredLayout = false;
+  /** Set the moment you move a note by hand. The pull towards the middle is
+   *  what stops an automatic layout wandering off screen, but it also means a
+   *  cluster parked to one side creeps back, so hand-arranging switches it off
+   *  and the arrangement is left alone. Tidy puts it back. */
+  let arranged = false;
   let saveTimer = null;
 
   // The view is torn down and rebuilt whenever its panel is closed and
@@ -65,7 +78,9 @@
       view: { x: view.x, y: view.y, scale: view.scale },
       query,
       groupByFile,
-      groupByTag
+      groupByTag,
+      tooltips,
+      arranged
     });
   }
 
@@ -112,6 +127,16 @@
     const previous = new Map(nodes.map((n) => [n.id, n]));
     const width = canvas.clientWidth || 800;
     const height = canvas.clientHeight || 600;
+    const known = payload.nodes
+      .map((n) => previous.get(n.id) || (saved && saved.positions && saved.positions[n.id]))
+      .filter(Boolean)
+      .map((n) => (Array.isArray(n) ? n : [n.x, n.y]));
+    const seed = known.length
+      ? [
+          known.reduce((sum, p) => sum + p[0], 0) / known.length,
+          known.reduce((sum, p) => sum + p[1], 0) / known.length
+        ]
+      : [width / 2, height / 2];
     let placed = 0;
     nodes = payload.nodes.map((n, i) => {
       const old = previous.get(n.id);
@@ -126,8 +151,8 @@
         [x, y] = remembered;
         placed++;
       } else {
-        x = width / 2 + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40;
-        y = height / 2 + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40;
+        x = seed[0] + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40;
+        y = seed[1] + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40;
       }
       return { ...n, x, y, vx: 0, vy: 0, degree: 0 };
     });
@@ -220,8 +245,15 @@
   }
 
   function step() {
-    if (settled && !dragging) {
+    if (settled) {
       return;
+    }
+    // A node being actively moved keeps the layout warm, so its neighbours are
+    // pulled along with it for as long as it is going somewhere. Keyed to the
+    // last movement rather than to the button being down: hold it still and
+    // everything settles, whether or not you have let go yet.
+    if (dragging && Date.now() - movedAt < DRAG_GRACE) {
+      alpha = Math.max(alpha, DRAG_ALPHA);
     }
     alpha += (alphaTarget - alpha) * ALPHA_DECAY;
     const width = canvas.clientWidth || 800;
@@ -267,8 +299,10 @@
     }
 
     for (const node of nodes) {
-      node.vx += (width / 2 - node.x) * 0.0015 * alpha;
-      node.vy += (height / 2 - node.y) * 0.0015 * alpha;
+      if (!arranged) {
+        node.vx += (width / 2 - node.x) * 0.0015 * alpha;
+        node.vy += (height / 2 - node.y) * 0.0015 * alpha;
+      }
       if (dragging === node) {
         node.vx = 0;
         node.vy = 0;
@@ -282,8 +316,10 @@
 
     // Cold enough to be finished, or nothing to simulate: stop outright. The
     // schedule decides this, so settling always takes the same short time
-    // whatever the layout was doing.
-    if (!dragging && (alpha <= ALPHA_MIN || nodes.length === 0)) {
+    // whatever the layout was doing. This applies while a node is still held,
+    // too: holding one still is not a reason to keep the others drifting, and
+    // moving it warms the layout straight back up.
+    if (alpha <= ALPHA_MIN || nodes.length === 0) {
       rest();
       saveStateSoon();
     }
@@ -356,18 +392,25 @@
       ctx.stroke();
 
       if (edge.kind === 'ref') {
-        // Arrow head, stopped at the target's edge.
+        // Arrow head, stopped at the target's edge. Big enough and blunt
+        // enough to read which way a link points at a glance: a long thin
+        // head reads as more line, not as a direction.
         const dx = edge.to.x - edge.from.x;
         const dy = edge.to.y - edge.from.y;
         const distance = Math.max(Math.hypot(dx, dy), 0.01);
-        const r = radiusOf(edge.to) + 2;
+        const r = radiusOf(edge.to) + 3;
         const tipX = edge.to.x - (dx / distance) * r;
         const tipY = edge.to.y - (dy / distance) * r;
         const angle = Math.atan2(dy, dx);
+        const head = 12;
+        const spread = 0.52;
+        ctx.globalAlpha = active ? 0.85 : 0.2;
         ctx.beginPath();
         ctx.moveTo(tipX, tipY);
-        ctx.lineTo(tipX - 7 * Math.cos(angle - 0.4), tipY - 7 * Math.sin(angle - 0.4));
-        ctx.lineTo(tipX - 7 * Math.cos(angle + 0.4), tipY - 7 * Math.sin(angle + 0.4));
+        ctx.lineTo(tipX - head * Math.cos(angle - spread), tipY - head * Math.sin(angle - spread));
+        // Notched at the back, so overlapping heads stay separable.
+        ctx.lineTo(tipX - head * 0.7 * Math.cos(angle), tipY - head * 0.7 * Math.sin(angle));
+        ctx.lineTo(tipX - head * Math.cos(angle + spread), tipY - head * Math.sin(angle + spread));
         ctx.closePath();
         ctx.fillStyle = foreground;
         ctx.fill();
@@ -473,11 +516,10 @@
     const node = nodeAt(point);
     if (node) {
       dragging = node;
-      // Held warm for as long as you hold the node, so its neighbours keep
-      // making room; released, it cools to a stop in a couple of hundred ms.
-      alpha = DRAG_ALPHA;
-      alphaTarget = DRAG_ALPHA;
-      settled = false;
+      // You are arranging it yourself now, so stop pulling it to the middle.
+      arranged = true;
+      movedAt = Date.now();
+      unsettle(DRAG_ALPHA);
     } else {
       panning = { x: e.clientX - view.x, y: e.clientY - view.y };
       canvas.classList.add('dragging');
@@ -489,6 +531,10 @@
     if (dragging) {
       dragging.x = point.x;
       dragging.y = point.y;
+      // Warmed by the movement itself rather than held warm by the button
+      // being down: hold a node still and everything stops around it.
+      movedAt = Date.now();
+      unsettle(DRAG_ALPHA);
       return;
     }
     if (panning) {
@@ -498,7 +544,7 @@
     }
     const node = nodeAt(point);
     hovered = node;
-    if (node) {
+    if (node && tooltips) {
       tip.hidden = false;
       tip.innerHTML = '';
       const title = document.createElement('b');
@@ -529,7 +575,6 @@
     if (dragging || panning) {
       saveStateSoon();
     }
-    alphaTarget = 0;
     dragging = null;
     panning = null;
     canvas.classList.remove('dragging');
@@ -572,6 +617,21 @@
     unsettle();
     saveStateSoon();
   });
+  tidy.addEventListener('click', () => {
+    // Hands the layout back to the simulation, framed in the middle again.
+    arranged = false;
+    burnIn(1);
+    recentre();
+    saveStateSoon();
+  });
+  showTip.addEventListener('change', () => {
+    // Nothing about the layout changes, so this does not re-settle anything.
+    tooltips = showTip.checked;
+    if (!tooltips) {
+      tip.hidden = true;
+    }
+    saveStateSoon();
+  });
 
   window.addEventListener('resize', resize);
   window.addEventListener('message', (event) => {
@@ -597,6 +657,11 @@
       groupByTag = startup.groupByTag;
       showTags.checked = groupByTag;
     }
+    if (typeof startup.tooltips === 'boolean') {
+      tooltips = startup.tooltips;
+      showTip.checked = tooltips;
+    }
+    arranged = startup.arranged === true;
   }
 
   resize();
