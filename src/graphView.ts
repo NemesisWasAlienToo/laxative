@@ -104,6 +104,7 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
     <div id="options" role="menu" aria-label="Graph options" hidden>
       <label role="menuitemcheckbox"><input id="showFiles" type="checkbox" checked> Link notes in the same file</label>
       <label role="menuitemcheckbox"><input id="showTags" type="checkbox" checked> Link notes sharing a hashtag</label>
+      <label role="menuitemcheckbox" title="Off: linked notes stay wherever you put them. Links are still drawn, and Tidy still lays notes out by them."><input id="linkPull" type="checkbox" checked> Links pull notes together</label>
       <label role="menuitemcheckbox"><input id="showTip" type="checkbox" checked> Show details on hover</label>
       <hr>
       <label role="menuitemcheckbox"><input id="openReveals" type="checkbox"> Go to code when opening a note</label>

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.7
+
+- Select several notes in the graph and move them as one. Ctrl/Cmd+click picks
+  a note out or puts it back; a right-drag draws a selection box (Shift+drag
+  does too, for trackpads), adding to the selection if Ctrl/Cmd/Shift is held.
+  Dragging any selected note moves the whole selection, keeping the notes'
+  positions relative to each other. Ctrl/Cmd+A selects every visible note;
+  Escape or a click on empty canvas clears the selection. Selected notes get a
+  halo in the editor's selection colour, distinct from the focus ring.
+- A plain drag of a note that is not selected still moves just that note, and
+  lets any selection go, so dragging behaves exactly as before unless you have
+  selected something.
+- Right-clicking the graph no longer shows the webview's empty copy/paste menu.
+- New option, **Links pull notes together**. Links act as springs, which is
+  what gives the automatic layout its shape, but it also meant linked notes
+  could not be kept far apart by hand. Untick it and they stay wherever you
+  put them; the links are still drawn. Tidy, and the layout of a graph opened
+  for the first time, still use the links, since that is what they are for.
+
 ## 0.6.6
 
 - The graph's settings moved from a row of checkboxes into an **Options ▾**

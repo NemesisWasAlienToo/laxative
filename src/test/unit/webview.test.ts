@@ -174,6 +174,7 @@ describe('graph webview', () => {
         <div id="options" hidden>
           <label><input id="showFiles" type="checkbox" checked></label>
           <label><input id="showTags" type="checkbox" checked></label>
+          <label><input id="linkPull" type="checkbox" checked></label>
           <label><input id="showTip" type="checkbox" checked></label>
           <label><input id="openReveals" type="checkbox"></label>
         </div>
@@ -206,7 +207,8 @@ describe('graph webview', () => {
       const context: Record<string, unknown> = { calls, arcs };
       for (const name of [
         'clearRect', 'save', 'restore', 'translate', 'scale', 'beginPath', 'arc', 'fill',
-        'stroke', 'moveTo', 'lineTo', 'closePath', 'setLineDash', 'fillText', 'setTransform'
+        'stroke', 'moveTo', 'lineTo', 'closePath', 'setLineDash', 'fillText', 'setTransform',
+        'fillRect', 'strokeRect'
       ]) {
         context[name] = record(name);
       }
@@ -714,6 +716,201 @@ describe('graph webview', () => {
     assert.strictEqual(report.focus, 'a', 'and the paint report says which note is ringed');
   });
 
+  it('can stop links pulling notes together, so linked notes can be kept apart', async () => {
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+    );
+    harness.send(graph); // a references b, and they share #perf
+    await delay(150);
+    const doc = harness.window.document;
+    const option = doc.getElementById('linkPull');
+    option.checked = false;
+    option.dispatchEvent(new harness.window.Event('change'));
+
+    const canvas = doc.getElementById('canvas');
+    const press = (target: any, type: string, x: number, y: number) =>
+      target.dispatchEvent(new harness.window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    const pair = () => (harness.window.__context.arcs as number[][]).slice(-2).map((a) => [a[0], a[1]]);
+    const gap = () => {
+      const [a, b] = pair();
+      return Math.hypot(a[0] - b[0], a[1] - b[1]);
+    };
+
+    // Pull the first note right away from the one it links to.
+    const [a] = pair();
+    press(canvas, 'mousedown', a[0], a[1]);
+    for (const [x, y] of [[300, 250], [180, 160], [60, 60]]) {
+      press(harness.window, 'mousemove', x, y);
+      await delay(40);
+    }
+    press(harness.window, 'mouseup', 60, 60);
+    await delay(250);
+    const apart = gap();
+    assert.ok(apart > 300, `the two linked notes were put far apart (${apart.toFixed(0)}px)`);
+
+    // Disturb the layout repeatedly: with the springs on, each re-settle drew
+    // the pair back together.
+    const showFiles = doc.getElementById('showFiles');
+    for (let i = 0; i < 6; i++) {
+      showFiles.checked = !showFiles.checked;
+      showFiles.dispatchEvent(new harness.window.Event('change'));
+      await delay(120);
+    }
+    const later = gap();
+    // A few pixels of give is expected: dragging the note out brushed the other
+    // one with repulsion, and re-settling lets it ease back to where it was left.
+    // A spring along the link would close the gap by far more than this.
+    assert.ok(
+      Math.abs(later - apart) < 15,
+      `they stay that far apart (${apart.toFixed(0)}px -> ${later.toFixed(0)}px)`
+    );
+    await delay(300); // persisting is debounced
+    assert.strictEqual(harness.state.current.linkTension, false, 'the choice is remembered');
+  });
+
+  describe('selecting several notes', () => {
+    const three = {
+      type: 'graph',
+      nodes: ['a', 'b', 'c'].map((id, i) => ({
+        id,
+        title: id.toUpperCase(),
+        file: `src/${id}.ts`,
+        line: i,
+        tags: [],
+        excerpt: ''
+      })),
+      edges: [],
+      broken: []
+    };
+
+    const press = (target: any, type: string, x: number, y: number, extra: Record<string, unknown> = {}) =>
+      target.dispatchEvent(
+        new harness.window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true, ...extra })
+      );
+    const key = (k: string, extra: Record<string, unknown> = {}) =>
+      harness.window.document.body.dispatchEvent(
+        new harness.window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...extra })
+      );
+    /** Note centres from the last frame, skipping the selection halos. These
+     *  notes have no links, so they are 5.5px and their halos 12.5px. */
+    const notes = (): number[][] => {
+      const recent = (harness.window.__context.arcs as number[][]).slice(-6);
+      return recent.filter((a) => a[2] < 9).slice(-3).map((a) => [a[0], a[1]]);
+    };
+    const selectedCount = () =>
+      plain(harness.posted.filter((m: any) => m.type === 'painted').at(-1)).selected;
+
+    async function start() {
+      harness = load(
+        'graph.js',
+        HTML,
+        prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+      );
+      harness.send(three);
+      await delay(150);
+      return harness.window.document.getElementById('canvas');
+    }
+
+    it('picks notes out with Ctrl+click and drags them together', async () => {
+      const canvas = await start();
+      const [a, b, c] = notes();
+      for (const [x, y] of [a, b]) {
+        press(canvas, 'mousedown', x, y, { ctrlKey: true });
+        press(harness.window, 'mouseup', x, y, { ctrlKey: true });
+      }
+      await delay(60);
+      assert.strictEqual(selectedCount(), 2, 'two notes selected');
+
+      // Grab one of them, without a modifier, and move it.
+      press(canvas, 'mousedown', a[0], a[1]);
+      for (let i = 1; i <= 4; i++) {
+        press(harness.window, 'mousemove', a[0] + 15 * i, a[1] + 10 * i);
+        await delay(20);
+      }
+      press(harness.window, 'mouseup', a[0] + 60, a[1] + 40);
+      await delay(60);
+
+      const [a2, b2, c2] = notes();
+      for (const [label, before, after] of [['a', a, a2], ['b', b, b2]] as const) {
+        const moved = [after[0] - before[0], after[1] - before[1]];
+        assert.ok(
+          Math.abs(moved[0] - 60) < 4 && Math.abs(moved[1] - 40) < 4,
+          `${label} moved with the group by (${moved.map((v) => v.toFixed(1))})`
+        );
+      }
+      assert.strictEqual(selectedCount(), 2, 'dragging the group keeps it selected');
+      assert.ok(Math.hypot(c2[0] - c[0], c2[1] - c[1]) < 30, 'the unselected note stayed roughly put');
+
+      // Ctrl+click on a selected note puts it back.
+      press(canvas, 'mousedown', b2[0], b2[1], { ctrlKey: true });
+      press(harness.window, 'mouseup', b2[0], b2[1], { ctrlKey: true });
+      await delay(60);
+      assert.strictEqual(selectedCount(), 1, 'Ctrl+click again deselects');
+    });
+
+    it('draws a selection box with a right-drag, or Shift+drag', async () => {
+      const canvas = await start();
+      const [a] = notes();
+
+      const menu = new harness.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      canvas.dispatchEvent(menu);
+      assert.strictEqual(menu.defaultPrevented, true, 'no context menu over the graph');
+
+      press(canvas, 'mousedown', 1, 1, { button: 2 });
+      press(harness.window, 'mousemove', 799, 599, { buttons: 2 });
+      press(harness.window, 'mouseup', 799, 599, { button: 2 });
+      await delay(60);
+      assert.strictEqual(selectedCount(), 3, 'a box round everything selects everything');
+
+      key('Escape');
+      await delay(60);
+      assert.strictEqual(selectedCount(), 0, 'Escape clears it');
+
+      // Shift+left-drag on empty canvas, boxing just one note.
+      press(canvas, 'mousedown', a[0] - 20, a[1] - 20, { shiftKey: true });
+      press(harness.window, 'mousemove', a[0] + 20, a[1] + 20, { shiftKey: true });
+      press(harness.window, 'mouseup', a[0] + 20, a[1] + 20, { shiftKey: true });
+      await delay(60);
+      assert.strictEqual(selectedCount(), 1, 'Shift+drag boxes just the note inside');
+    });
+
+    it('selects all with Ctrl+A and clears on a click on empty canvas', async () => {
+      const canvas = await start();
+      key('a', { ctrlKey: true });
+      await delay(60);
+      assert.strictEqual(selectedCount(), 3, 'Ctrl+A selects every visible note');
+      assert.match(
+        harness.window.document.getElementById('stats').textContent,
+        /3 selected/,
+        'the toolbar says how many are selected'
+      );
+
+      // Find a spot with no note under it.
+      const taken = notes();
+      const empty = [[20, 580], [780, 20], [20, 20], [780, 580]].find(
+        ([x, y]) => taken.every(([nx, ny]) => Math.hypot(nx - x, ny - y) > 40)
+      ) as number[];
+      press(canvas, 'mousedown', empty[0], empty[1]);
+      press(harness.window, 'mouseup', empty[0], empty[1]);
+      await delay(60);
+      assert.strictEqual(selectedCount(), 0, 'a plain click on empty space clears the selection');
+    });
+
+    it('lets a plain drag move one note, as it always has', async () => {
+      const canvas = await start();
+      const [, , c] = notes();
+      press(canvas, 'mousedown', c[0], c[1]);
+      press(harness.window, 'mousemove', c[0] + 50, c[1]);
+      press(harness.window, 'mouseup', c[0] + 50, c[1]);
+      await delay(60);
+      const c2 = notes()[2];
+      assert.ok(Math.abs(c2[0] - c[0] - 50) < 4, 'the grabbed note moved');
+      assert.strictEqual(selectedCount(), 0, 'and nothing became selected by it');
+    });
+  });
+
   it('remembers its layout so reopening the panel does not re-animate', async () => {
     const remembered = {
       v: 2,
@@ -749,7 +946,8 @@ describe('graph webview', () => {
       groupByFile: false,
       groupByTag: true,
       tooltips: false,
-      revealOnOpen: true
+      revealOnOpen: true,
+      linkTension: false
     });
     const byId = (id: string) => harness.window.document.getElementById(id);
     assert.strictEqual(byId('filter').value, 'second');
@@ -757,6 +955,7 @@ describe('graph webview', () => {
     assert.strictEqual(byId('showTags').checked, true);
     assert.strictEqual(byId('showTip').checked, false);
     assert.strictEqual(byId('openReveals').checked, true);
+    assert.strictEqual(byId('linkPull').checked, false);
   });
 
   it('persists where the notes ended up once it has settled', async () => {
