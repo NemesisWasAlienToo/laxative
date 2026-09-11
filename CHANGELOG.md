@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.6
+
+- The graph's settings moved from a row of checkboxes into an **Options ▾**
+  dropdown, which closes on Escape or a click elsewhere like VS Code's own menus.
+- New option, **Go to code when opening a note**: a double-click in the graph
+  goes to the note's code as well as opening it, the code first so the reading
+  panel lands beside it. Off by default; Alt+double-click still goes to the
+  code alone.
+- The note you have open is ringed in the graph, in the theme's focus colour.
+  It follows whichever note's editor is active, or else the note on show in
+  the reading panel, and goes away when neither is open.
+
 ## 0.6.5
 
 - Holding a node keeps the graph moving again, so grabbing one is once more how

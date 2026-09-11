@@ -14,6 +14,15 @@ import { Diagnostics } from './diagnostics';
  */
 export class NotePanel {
   private static current?: NotePanel;
+  private static readonly changed = new vscode.EventEmitter<void>();
+  /** Fires when the note on show, or whether the panel is on screen, changes. */
+  static readonly onDidChange = NotePanel.changed.event;
+
+  /** The note the reading panel is showing, if the panel is on screen. */
+  static shownNote(): string | undefined {
+    const current = NotePanel.current;
+    return current?.panel.visible ? current.noteId : undefined;
+  }
   private readonly disposables: vscode.Disposable[] = [];
   private noteId: string;
   private previewTimer?: NodeJS.Timeout;
@@ -33,6 +42,7 @@ export class NotePanel {
       this.disposables
     );
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.onDidChangeViewState(() => NotePanel.changed.fire(), null, this.disposables);
     this.panel.webview.html = this.shell();
     this.disposables.push(
       store.onDidChange(() => this.push()),
@@ -134,6 +144,7 @@ export class NotePanel {
 
   /** Sends the note as it currently reads to the webview. */
   private push(): void {
+    NotePanel.changed.fire();
     const note = this.store.get(this.noteId);
     if (!note) {
       this.panel.title = 'Note (deleted)';
@@ -196,6 +207,7 @@ export class NotePanel {
     clearTimeout(this.previewTimer);
     if (NotePanel.current === this) {
       NotePanel.current = undefined;
+      NotePanel.changed.fire();
     }
     this.panel.dispose();
     for (const d of this.disposables) {

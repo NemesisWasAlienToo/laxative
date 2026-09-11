@@ -169,9 +169,15 @@ describe('graph webview', () => {
   const HTML = `
     <div id="hud">
       <input id="filter" type="text">
-      <label><input id="showFiles" type="checkbox" checked></label>
-      <label><input id="showTags" type="checkbox" checked></label>
-      <label><input id="showTip" type="checkbox" checked></label>
+      <div class="menu-anchor">
+        <button id="optionsButton" type="button" aria-expanded="false">Options</button>
+        <div id="options" hidden>
+          <label><input id="showFiles" type="checkbox" checked></label>
+          <label><input id="showTags" type="checkbox" checked></label>
+          <label><input id="showTip" type="checkbox" checked></label>
+          <label><input id="openReveals" type="checkbox"></label>
+        </div>
+      </div>
       <button id="tidy" type="button">Tidy</button>
       <span id="stats"></span>
     </div>
@@ -335,7 +341,72 @@ describe('graph webview', () => {
     assert.strictEqual(opens().length, 0, 'nor does a plain click on it');
 
     mouse(canvas, 'dblclick', 250, 200);
-    assert.deepStrictEqual(plain(opens()), [{ type: 'open', id: 'solo' }]);
+    assert.deepStrictEqual(plain(opens()), [{ type: 'open', id: 'solo', reveal: false }]);
+  });
+
+  it('keeps its options in a dropdown menu that closes like a VS Code menu', () => {
+    harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+    const doc = harness.window.document;
+    const button = doc.getElementById('optionsButton');
+    const menu = doc.getElementById('options');
+    const click = (target: any, type = 'click') =>
+      target.dispatchEvent(new harness.window.MouseEvent(type, { bubbles: true }));
+
+    assert.strictEqual(menu.hidden, true, 'closed to begin with');
+    click(button);
+    assert.strictEqual(menu.hidden, false, 'the button opens it');
+    assert.strictEqual(button.getAttribute('aria-expanded'), 'true');
+
+    const toggle = doc.getElementById('showTags');
+    click(toggle, 'mousedown');
+    toggle.click();
+    assert.strictEqual(menu.hidden, false, 'ticking an option leaves it open');
+    assert.strictEqual(toggle.checked, false, 'and the option really toggled');
+
+    click(doc.getElementById('canvas'), 'mousedown');
+    assert.strictEqual(menu.hidden, true, 'a click anywhere else closes it');
+
+    click(button);
+    doc.dispatchEvent(new harness.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.strictEqual(menu.hidden, true, 'and so does Escape');
+    assert.strictEqual(button.getAttribute('aria-expanded'), 'false');
+  });
+
+  it('goes to the code as well when opening a note, if asked to', async () => {
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { fixedLayout: true, recordArcs: true })
+    );
+    harness.send({
+      type: 'graph',
+      nodes: [{ id: 'solo', title: 'Solo', file: 'src/a.ts', line: 1, tags: [], excerpt: '' }],
+      edges: [],
+      broken: []
+    });
+    await delay(60);
+    const canvas = harness.window.document.getElementById('canvas');
+    const [x, y] = harness.window.__context.arcs.at(-1);
+    const doubleClick = (altKey = false) =>
+      canvas.dispatchEvent(
+        new harness.window.MouseEvent('dblclick', { clientX: x, clientY: y, altKey, bubbles: true })
+      );
+    const last = () => plain(harness.posted.at(-1));
+
+    doubleClick();
+    assert.deepStrictEqual(last(), { type: 'open', id: 'solo', reveal: false }, 'off by default');
+
+    const option = harness.window.document.getElementById('openReveals');
+    option.checked = true;
+    option.dispatchEvent(new harness.window.Event('change'));
+    doubleClick();
+    assert.deepStrictEqual(last(), { type: 'open', id: 'solo', reveal: true }, 'on once ticked');
+
+    doubleClick(true);
+    assert.deepStrictEqual(last(), { type: 'reveal', id: 'solo' }, 'Alt still goes to the code alone');
+
+    await delay(300); // persisting is debounced
+    assert.strictEqual(harness.state.current.revealOnOpen, true, 'the choice is remembered');
   });
 
   it('still draws when the webview gets its size only after the script ran', async () => {
@@ -612,6 +683,37 @@ describe('graph webview', () => {
     );
   });
 
+  it('rings the note that is open, so it stands out among the others', async () => {
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+    );
+    harness.send({ ...graph, focus: 'b' });
+    await delay(120);
+
+    // Each frame paints the notes in order, and a ring is one more arc straight
+    // after the note it surrounds: so the last three here are a, b, ring(b).
+    const lastArcs = (count: number) => (harness.window.__context.arcs as number[][]).slice(-count);
+    const [, b, ring] = lastArcs(3);
+    assert.deepStrictEqual([ring[0], ring[1]], [b[0], b[1]], 'a ring is centred on the focused note');
+    assert.ok(ring[2] > b[2], 'and drawn wider than the note itself');
+
+    harness.send({ type: 'focus', id: null });
+    await delay(80);
+    const [first, second] = lastArcs(2);
+    assert.notDeepStrictEqual(
+      [first[0], first[1]],
+      [second[0], second[1]],
+      'no ring once nothing is focused: the last two arcs are the two notes'
+    );
+
+    harness.send({ type: 'focus', id: 'a' });
+    await delay(80);
+    const report = plain(harness.posted.filter((m: any) => m.type === 'painted').at(-1));
+    assert.strictEqual(report.focus, 'a', 'and the paint report says which note is ringed');
+  });
+
   it('remembers its layout so reopening the panel does not re-animate', async () => {
     const remembered = {
       v: 2,
@@ -638,19 +740,23 @@ describe('graph webview', () => {
     );
   });
 
-  it('restores the filter and grouping it was left with', async () => {
+  it('restores the filter and options it was left with', async () => {
     harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }), {
       v: 2,
       positions: {},
       view: { x: 0, y: 0, scale: 1 },
       query: 'second',
       groupByFile: false,
-      groupByTag: true
+      groupByTag: true,
+      tooltips: false,
+      revealOnOpen: true
     });
     const byId = (id: string) => harness.window.document.getElementById(id);
     assert.strictEqual(byId('filter').value, 'second');
     assert.strictEqual(byId('showFiles').checked, false);
     assert.strictEqual(byId('showTags').checked, true);
+    assert.strictEqual(byId('showTip').checked, false);
+    assert.strictEqual(byId('openReveals').checked, true);
   });
 
   it('persists where the notes ended up once it has settled', async () => {

@@ -210,8 +210,10 @@ them there.
    - drag one cluster off to a corner: it is left there, because moving a note
      by hand switches off the pull towards the middle. **Tidy** puts the
      automatic layout back;
-   - untick **hover details** if the hover card is in the way; hovering still
-     highlights a note's neighbours;
+   - open **Options ▾**: untick *Show details on hover* if the hover card is
+     in the way, or tick *Go to code when opening a note* and double-click a
+     node - the code opens, and the note beside it;
+   - with a note open, its node is ringed; open another and the ring follows;
    - close the panel and reopen it: same layout, no animation at all;
    - type in the filter box: notes that do not match disappear rather than fade;
    - **double-click** a node to open it - a single drag must never open one.

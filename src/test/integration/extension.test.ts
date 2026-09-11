@@ -305,6 +305,41 @@ describe('Laxative extension', function () {
     assert.ok(report.width > 0 && report.height > 0, 'the canvas has a real drawing surface');
   });
 
+  it('rings the note you have open in the graph', async () => {
+    await writeStore([
+      makeNote({ id: 'ringaaa1', body: 'One, links to [[ringbbb2]]' }),
+      makeNote({ id: 'ringbbb2', file: 'src/other.ts', body: 'Two' })
+    ]);
+    await vscode.commands.executeCommand('laxative.showGraph');
+    await waitFor(async () => ((await renderReport()).graph?.nodes === 2 ? true : undefined), 'the graph');
+
+    await vscode.commands.executeCommand('laxative.openNote', 'ringbbb2');
+    await waitFor(
+      async () => ((await renderReport()).graph?.focus === 'ringbbb2' ? true : undefined),
+      'the open note to be ringed'
+    );
+
+    // The panel is already open now, so only the panel saying what it shows
+    // can move the ring: nothing about the panel's visibility changes.
+    await vscode.commands.executeCommand('laxative.openNote', 'ringaaa1');
+    await waitFor(
+      async () => ((await renderReport()).graph?.focus === 'ringaaa1' ? true : undefined),
+      'the ring to follow the reading panel to another note'
+    );
+
+    await vscode.commands.executeCommand('laxative.editNote', 'ringbbb2');
+    await waitFor(
+      async () => ((await renderReport()).graph?.focus === 'ringbbb2' ? true : undefined),
+      'the ring to follow the note being edited'
+    );
+
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await waitFor(
+      async () => ((await renderReport()).graph?.focus === null ? true : undefined),
+      'the ring to go once no note is open'
+    );
+  });
+
   it('registers the graph as a view rather than an editor tab', () => {
     const views = vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON?.contributes?.views;
     const graphViews = views?.laxativeGraph as { id: string; type: string }[] | undefined;
