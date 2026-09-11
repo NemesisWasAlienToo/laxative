@@ -12,6 +12,7 @@
   const showTip = /** @type {HTMLInputElement} */ (document.getElementById('showTip'));
   const tidy = /** @type {HTMLButtonElement} */ (document.getElementById('tidy'));
   const openReveals = /** @type {HTMLInputElement} */ (document.getElementById('openReveals'));
+  const linkPull = /** @type {HTMLInputElement} */ (document.getElementById('linkPull'));
   const optionsButton = /** @type {HTMLButtonElement} */ (document.getElementById('optionsButton'));
   const options = /** @type {HTMLElement} */ (document.getElementById('options'));
   const stats = document.getElementById('stats');
@@ -27,6 +28,17 @@
   let hovered = null;
   let dragging = null;
   let panning = null;
+  /** Ids of the notes you have picked out. Grabbing any one of them moves the
+   *  whole selection together, keeping their positions relative to each other. */
+  let selected = new Set();
+  /** Where the pointer was at the last drag step, so a group moves by deltas
+   *  and the grabbed note keeps its offset from the pointer. */
+  let dragFrom = null;
+  /** A selection box being drawn, in world coordinates. */
+  let marquee = null;
+  /** A left press on empty canvas: if it never moves, it was a click, which
+   *  clears the selection the way clicking empty space does everywhere else. */
+  let pressedEmpty = null;
   let query = '';
   let groupByFile = true;
   let groupByTag = true;
@@ -37,6 +49,13 @@
    *  the graph is for browsing, and moving the editor on every double-click
    *  is disruptive unless you have asked for it. */
   let revealOnOpen = false;
+  /** Links act as springs, pulling linked notes towards each other. Off, you
+   *  can put linked notes as far apart as you like and they stay there; the
+   *  links are still drawn. */
+  let linkTension = true;
+  /** True while Tidy or a brand-new layout is being computed. Those are asking
+   *  for a layout *by* the links, so they use them whatever the option says. */
+  let annealing = false;
   /** The note open in front of you, ringed so it stands out in the graph. */
   let focusedId = null;
   /** True once motion has died down; the simulation then stops until something
@@ -101,6 +120,7 @@
       groupByTag,
       tooltips,
       revealOnOpen,
+      linkTension,
       arranged
     });
   }
@@ -211,11 +231,13 @@
       // A layout with some notes already placed only needs room made for the
       // new ones, so it starts warm rather than hot and barely disturbs the
       // notes you had arranged.
-      burnIn(placed > 0 ? 0.5 : 1);
+      burnIn(placed > 0 ? 0.5 : 1, placed === 0);
     }
     saveStateSoon();
     focusedId = payload.focus || null;
-    stats.textContent = `${nodes.length} notes · ${edges.length} links · double-click to open`;
+    // A note that was deleted cannot stay selected.
+    selected = new Set(nodes.filter((n) => selected.has(n.id)).map((n) => n.id));
+    updateStats();
   }
 
   /** Stops the simulation dead: no residual velocity, no lingering drift. */
@@ -236,10 +258,11 @@
    * budget is capped against the O(n^2) repulsion so even a large graph stays
    * well inside a single frame.
    */
-  function burnIn(warmth) {
+  function burnIn(warmth, structural) {
     const count = Math.max(nodes.length, 1);
     const budget = Math.max(60, Math.min(600, Math.floor(400000 / (count * count))));
     const hot = Math.floor(budget * 0.6);
+    annealing = structural === true;
     alpha = warmth;
     alphaTarget = warmth;
     settled = false;
@@ -251,6 +274,7 @@
     }
     rest();
     anchor();
+    annealing = false;
   }
 
   /** Faint links between notes that share a file or a hashtag. */
@@ -323,7 +347,7 @@
       }
     }
 
-    for (const edge of springs) {
+    for (const edge of linkTension || annealing ? springs : []) {
       const dx = edge.to.x - edge.from.x;
       const dy = edge.to.y - edge.from.y;
       const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
@@ -346,7 +370,7 @@
         node.vx += (width / 2 - node.x) * 0.0015 * alpha;
         node.vy += (height / 2 - node.y) * 0.0015 * alpha;
       }
-      if (dragging === node) {
+      if (isHeld(node)) {
         node.vx = 0;
         node.vy = 0;
         continue;
@@ -415,6 +439,8 @@
     const style = getComputedStyle(document.body);
     const foreground = style.color || '#ccc';
     const focusColour = style.getPropertyValue('--vscode-focusBorder').trim() || '#3794ff';
+    const selectionColour =
+      style.getPropertyValue('--vscode-editor-selectionBackground').trim() || 'rgba(38, 79, 120, 0.8)';
     const neighbours = new Set();
     if (hovered) {
       neighbours.add(hovered.id);
@@ -467,6 +493,15 @@
         continue;
       }
       const dimmed = hovered && !neighbours.has(node.id);
+      if (selected.has(node.id)) {
+        // A halo behind the note in the editor's selection colour: reads as
+        // "selected" at a glance and stays distinct from the focus ring.
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radiusOf(node) + 7, 0, Math.PI * 2);
+        ctx.fillStyle = selectionColour;
+        ctx.fill();
+      }
       ctx.globalAlpha = dimmed ? 0.25 : 1;
       ctx.beginPath();
       ctx.arc(node.x, node.y, radiusOf(node), 0, Math.PI * 2);
@@ -497,6 +532,18 @@
         ctx.fillText(label, node.x, node.y + radiusOf(node) + 12);
       }
     }
+    if (marquee) {
+      const box = boxOf(marquee);
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = focusColour;
+      ctx.fillRect(box.x, box.y, box.w, box.h);
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = focusColour;
+      ctx.lineWidth = 1 / view.scale;
+      ctx.setLineDash([4 / view.scale, 3 / view.scale]);
+      ctx.strokeRect(box.x, box.y, box.w, box.h);
+      ctx.setLineDash([]);
+    }
     ctx.restore();
     ctx.globalAlpha = 1;
   }
@@ -520,7 +567,7 @@
 
   /** Reports what is actually on the canvas whenever that changes. */
   function report() {
-    const state = `${nodes.length}:${edges.length}:${canvas.width}x${canvas.height}:${focusedId}`;
+    const state = `${nodes.length}:${edges.length}:${canvas.width}x${canvas.height}:${focusedId}:${selected.size}`;
     if (state !== lastReport) {
       lastReport = state;
       vscode.postMessage({
@@ -529,7 +576,8 @@
         edges: edges.length,
         width: canvas.width,
         height: canvas.height,
-        focus: focusedId
+        focus: focusedId,
+        selected: selected.size
       });
     }
   }
@@ -569,11 +617,76 @@
     return null;
   }
 
+  /** Pinned by the pointer: the grabbed note, and the rest of the selection
+   *  with it when the grabbed note is part of one. */
+  function isHeld(node) {
+    return dragging !== null && (node === dragging || selected.has(node.id));
+  }
+
+  function boxOf(m) {
+    return {
+      x: Math.min(m.x0, m.x1),
+      y: Math.min(m.y0, m.y1),
+      w: Math.abs(m.x1 - m.x0),
+      h: Math.abs(m.y1 - m.y0)
+    };
+  }
+
+  function updateStats() {
+    const count = selected.size;
+    stats.textContent =
+      `${nodes.length} notes · ${edges.length} links · ` +
+      (count > 0 ? `${count} selected · Esc to clear` : 'double-click to open');
+  }
+
+  function select(ids) {
+    selected = new Set(ids);
+    updateStats();
+  }
+
+  // Right-click is the selection box, so the webview's own context menu (copy
+  // and paste, with nothing to copy or paste) would only get in the way.
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
   canvas.addEventListener('mousedown', (e) => {
     const point = toWorld(e);
     const node = nodeAt(point);
+    const additive = e.ctrlKey || e.metaKey || e.shiftKey;
+
+    // A selection box: right-drag anywhere, or Shift+drag on empty canvas for
+    // trackpads. With a modifier held it adds to what is already selected.
+    if (e.button === 2 || (e.button === 0 && e.shiftKey && !node)) {
+      e.preventDefault();
+      marquee = {
+        x0: point.x,
+        y0: point.y,
+        x1: point.x,
+        y1: point.y,
+        base: additive ? new Set(selected) : new Set()
+      };
+      return;
+    }
+    if (e.button !== 0) {
+      return;
+    }
+
     if (node) {
+      if (additive) {
+        // Ctrl/Cmd/Shift+click picks a note out, or puts it back.
+        if (selected.has(node.id)) {
+          selected.delete(node.id);
+          updateStats();
+          return;
+        }
+        selected.add(node.id);
+        updateStats();
+      } else if (!selected.has(node.id)) {
+        // Grabbing a note outside the selection lets the selection go, so a
+        // plain drag behaves exactly as it always has.
+        select([]);
+      }
       dragging = node;
+      dragFrom = point;
       // You are arranging it yourself now, so stop pulling everything to the
       // middle and hold each note where it currently sits instead.
       if (!arranged) {
@@ -583,6 +696,7 @@
       unsettle(DRAG_ALPHA);
     } else {
       panning = { x: e.clientX - view.x, y: e.clientY - view.y };
+      pressedEmpty = { x: e.clientX, y: e.clientY };
       canvas.classList.add('dragging');
     }
   });
@@ -590,12 +704,29 @@
   window.addEventListener('mousemove', (e) => {
     const point = toWorld(e);
     if (dragging) {
-      dragging.x = point.x;
-      dragging.y = point.y;
-      // Where you are putting it is where it now belongs.
-      dragging.hx = point.x;
-      dragging.hy = point.y;
+      const dx = point.x - dragFrom.x;
+      const dy = point.y - dragFrom.y;
+      dragFrom = point;
+      for (const node of nodes) {
+        if (isHeld(node)) {
+          node.x += dx;
+          node.y += dy;
+          // Where you are putting it is where it now belongs.
+          node.hx = node.x;
+          node.hy = node.y;
+        }
+      }
       unsettle(DRAG_ALPHA);
+      return;
+    }
+    if (marquee) {
+      marquee.x1 = point.x;
+      marquee.y1 = point.y;
+      const box = boxOf(marquee);
+      const inside = nodes.filter(
+        (n) => isMatch(n) && n.x >= box.x && n.x <= box.x + box.w && n.y >= box.y && n.y <= box.y + box.h
+      );
+      select([...marquee.base, ...inside.map((n) => n.id)]);
       return;
     }
     if (panning) {
@@ -632,12 +763,18 @@
     }
   });
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', (e) => {
     if (dragging || panning) {
       saveStateSoon();
     }
+    if (pressedEmpty && Math.hypot(e.clientX - pressedEmpty.x, e.clientY - pressedEmpty.y) < 4) {
+      select([]);
+    }
     dragging = null;
+    dragFrom = null;
     panning = null;
+    marquee = null;
+    pressedEmpty = null;
     canvas.classList.remove('dragging');
   });
 
@@ -686,8 +823,15 @@
   tidy.addEventListener('click', () => {
     // Hands the layout back to the simulation, framed in the middle again.
     arranged = false;
-    burnIn(1);
+    burnIn(1, true);
     recentre();
+    saveStateSoon();
+  });
+  linkPull.addEventListener('change', () => {
+    linkTension = linkPull.checked;
+    if (linkTension) {
+      unsettle(); // links take hold again, so let the layout respond
+    }
     saveStateSoon();
   });
   openReveals.addEventListener('change', () => {
@@ -721,6 +865,16 @@
     if (e.key === 'Escape' && !options.hidden) {
       setMenu(false);
       optionsButton.focus();
+      return;
+    }
+    if (e.target instanceof HTMLInputElement) {
+      return; // typing in the filter box, where these keys mean text editing
+    }
+    if (e.key === 'Escape' && selected.size > 0) {
+      select([]);
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      select(nodes.filter(isMatch).map((n) => n.id));
     }
   });
 
@@ -762,6 +916,10 @@
     if (typeof startup.tooltips === 'boolean') {
       tooltips = startup.tooltips;
       showTip.checked = tooltips;
+    }
+    if (typeof startup.linkTension === 'boolean') {
+      linkTension = startup.linkTension;
+      linkPull.checked = linkTension;
     }
     if (typeof startup.revealOnOpen === 'boolean') {
       revealOnOpen = startup.revealOnOpen;

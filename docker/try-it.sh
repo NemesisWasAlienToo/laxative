@@ -214,6 +214,10 @@ them there.
      in the way, or tick *Go to code when opening a note* and double-click a
      node - the code opens, and the note beside it;
    - with a note open, its node is ringed; open another and the ring follows;
+   - **right-drag** a box around a few notes (or Ctrl+click them), then drag one
+     of them: the whole selection moves together. Escape clears it;
+   - untick **Links pull notes together** and drag two linked notes far
+     apart: they stay there, the link stretched between them;
    - close the panel and reopen it: same layout, no animation at all;
    - type in the filter box: notes that do not match disappear rather than fade;
    - **double-click** a node to open it - a single drag must never open one.
