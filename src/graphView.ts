@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { NoteStore } from './store';
 import { buildGraph } from './core/refs';
 import { Diagnostics } from './diagnostics';
+import { NotePanel } from './notePanel';
+import { NOTE_SCHEME } from './noteDocuments';
 
 /**
  * The note graph, living in the bottom panel next to Terminal and Problems the
@@ -12,6 +14,7 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private view?: vscode.WebviewView;
   private readonly disposables: vscode.Disposable[] = [];
+  private sentFocus?: string | null;
 
   constructor(
     private readonly store: NoteStore,
@@ -22,8 +25,32 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
       vscode.window.registerWebviewViewProvider(GraphView.viewType, this, {
         webviewOptions: { retainContextWhenHidden: true }
       }),
-      store.onDidChange(() => this.push())
+      store.onDidChange(() => this.push()),
+      NotePanel.onDidChange(() => this.pushFocus()),
+      vscode.window.onDidChangeActiveTextEditor(() => this.pushFocus())
     );
+  }
+
+  /**
+   * The note you are looking at: the one whose editor is active, or else the
+   * one on show in the reading panel. The graph rings it, so you can see where
+   * the note you have open sits among the others.
+   */
+  private focusedNote(): string | null {
+    const uri = vscode.window.activeTextEditor?.document.uri;
+    if (uri?.scheme === NOTE_SCHEME && this.store.get(uri.authority)) {
+      return uri.authority;
+    }
+    return NotePanel.shownNote() ?? null;
+  }
+
+  private pushFocus(): void {
+    const focus = this.focusedNote();
+    if (!this.view || focus === this.sentFocus) {
+      return;
+    }
+    this.sentFocus = focus;
+    void this.view.webview.postMessage({ type: 'focus', id: focus });
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -33,13 +60,13 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')]
     };
     view.webview.onDidReceiveMessage(
-      (msg: { type: string; id?: string }) => {
+      (msg: { type: string; id?: string; reveal?: boolean }) => {
         if (msg.type === 'ready') {
           this.push();
         } else if (msg.type === 'painted') {
           this.diagnostics.record('graph', msg as Record<string, unknown>);
         } else if (msg.type === 'open' && msg.id) {
-          void vscode.commands.executeCommand('laxative.openNote', msg.id);
+          void this.open(msg.id, msg.reveal === true);
         } else if (msg.type === 'reveal' && msg.id) {
           void vscode.commands.executeCommand('laxative.revealNote', msg.id);
         }
@@ -71,9 +98,17 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
 <body>
 <div id="hud">
   <input id="filter" type="text" placeholder="Filter notes...">
-  <label><input id="showFiles" type="checkbox" checked> link same file</label>
-  <label><input id="showTags" type="checkbox" checked> link same hashtag</label>
-  <label><input id="showTip" type="checkbox" checked> hover details</label>
+  <div class="menu-anchor">
+    <button id="optionsButton" type="button" aria-haspopup="true" aria-expanded="false"
+      aria-controls="options">Options <span aria-hidden="true">&#9662;</span></button>
+    <div id="options" role="menu" aria-label="Graph options" hidden>
+      <label role="menuitemcheckbox"><input id="showFiles" type="checkbox" checked> Link notes in the same file</label>
+      <label role="menuitemcheckbox"><input id="showTags" type="checkbox" checked> Link notes sharing a hashtag</label>
+      <label role="menuitemcheckbox"><input id="showTip" type="checkbox" checked> Show details on hover</label>
+      <hr>
+      <label role="menuitemcheckbox"><input id="openReveals" type="checkbox"> Go to code when opening a note</label>
+    </div>
+  </div>
   <button id="tidy" type="button" title="Lay the notes out automatically again">Tidy</button>
   <span id="stats"></span>
 </div>
@@ -101,8 +136,21 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
         excerpt: n.body.slice(0, 240)
       })),
       edges: graph.edges,
-      broken: graph.broken
+      broken: graph.broken,
+      focus: (this.sentFocus = this.focusedNote())
     });
+  }
+
+  /**
+   * Opens a note from the graph, going to its code first when the graph's
+   * "Go to code when opening" option is on: the code settles into its own
+   * column before the reading panel opens beside it, as the Notes view does.
+   */
+  private async open(id: string, reveal: boolean): Promise<void> {
+    if (reveal) {
+      await vscode.commands.executeCommand('laxative.revealNote', id);
+    }
+    await vscode.commands.executeCommand('laxative.openNote', id);
   }
 
   /** Brings the graph tab forward in the bottom panel. */

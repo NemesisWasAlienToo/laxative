@@ -11,6 +11,9 @@
   const showTags = /** @type {HTMLInputElement} */ (document.getElementById('showTags'));
   const showTip = /** @type {HTMLInputElement} */ (document.getElementById('showTip'));
   const tidy = /** @type {HTMLButtonElement} */ (document.getElementById('tidy'));
+  const openReveals = /** @type {HTMLInputElement} */ (document.getElementById('openReveals'));
+  const optionsButton = /** @type {HTMLButtonElement} */ (document.getElementById('optionsButton'));
+  const options = /** @type {HTMLElement} */ (document.getElementById('options'));
   const stats = document.getElementById('stats');
 
   const PALETTE = [
@@ -30,6 +33,12 @@
   /** The hover card is useful until it is sitting on top of what you want to
    *  see, so it can be switched off without losing the hover highlight. */
   let tooltips = true;
+  /** Opening a note also jumps to the code it is attached to. Off by default:
+   *  the graph is for browsing, and moving the editor on every double-click
+   *  is disruptive unless you have asked for it. */
+  let revealOnOpen = false;
+  /** The note open in front of you, ringed so it stands out in the graph. */
+  let focusedId = null;
   /** True once motion has died down; the simulation then stops until something
    *  disturbs it, so a settled graph costs nothing and never jitters. */
   let settled = false;
@@ -91,6 +100,7 @@
       groupByFile,
       groupByTag,
       tooltips,
+      revealOnOpen,
       arranged
     });
   }
@@ -204,6 +214,7 @@
       burnIn(placed > 0 ? 0.5 : 1);
     }
     saveStateSoon();
+    focusedId = payload.focus || null;
     stats.textContent = `${nodes.length} notes · ${edges.length} links · double-click to open`;
   }
 
@@ -403,6 +414,7 @@
 
     const style = getComputedStyle(document.body);
     const foreground = style.color || '#ccc';
+    const focusColour = style.getPropertyValue('--vscode-focusBorder').trim() || '#3794ff';
     const neighbours = new Set();
     if (hovered) {
       neighbours.add(hovered.id);
@@ -465,7 +477,18 @@
         ctx.strokeStyle = foreground;
         ctx.stroke();
       }
-      if (view.scale > 0.55 || node === hovered) {
+      const focused = node.id === focusedId;
+      if (focused) {
+        // A ring with a gap, in the theme's focus colour: the same cue VS Code
+        // uses for "this is the one with focus", and it survives dimming.
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radiusOf(node) + 4, 0, Math.PI * 2);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = focusColour;
+        ctx.stroke();
+      }
+      if (view.scale > 0.55 || node === hovered || focused) {
         ctx.globalAlpha = dimmed ? 0.3 : 0.9;
         ctx.fillStyle = foreground;
         ctx.font = `${Math.min(11 + node.degree * 0.4, 15).toFixed(1)}px system-ui, sans-serif`;
@@ -497,7 +520,7 @@
 
   /** Reports what is actually on the canvas whenever that changes. */
   function report() {
-    const state = `${nodes.length}:${edges.length}:${canvas.width}x${canvas.height}`;
+    const state = `${nodes.length}:${edges.length}:${canvas.width}x${canvas.height}:${focusedId}`;
     if (state !== lastReport) {
       lastReport = state;
       vscode.postMessage({
@@ -505,7 +528,8 @@
         nodes: nodes.length,
         edges: edges.length,
         width: canvas.width,
-        height: canvas.height
+        height: canvas.height,
+        focus: focusedId
       });
     }
   }
@@ -622,7 +646,12 @@
   canvas.addEventListener('dblclick', (e) => {
     const node = nodeAt(toWorld(e));
     if (node) {
-      vscode.postMessage({ type: e.altKey ? 'reveal' : 'open', id: node.id });
+      // Alt+double-click still goes to the code alone.
+      vscode.postMessage(
+        e.altKey
+          ? { type: 'reveal', id: node.id }
+          : { type: 'open', id: node.id, reveal: revealOnOpen }
+      );
     }
   });
 
@@ -661,6 +690,40 @@
     recentre();
     saveStateSoon();
   });
+  openReveals.addEventListener('change', () => {
+    revealOnOpen = openReveals.checked;
+    saveStateSoon();
+  });
+
+  // The options menu: a button that drops a small menu down, closed again by
+  // a click anywhere else or by Escape, the way VS Code's own menus behave.
+  function setMenu(open) {
+    options.hidden = !open;
+    optionsButton.setAttribute('aria-expanded', String(open));
+    optionsButton.classList.toggle('open', open);
+    if (open) {
+      const first = options.querySelector('input');
+      if (first) first.focus();
+    }
+  }
+  optionsButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setMenu(options.hidden);
+  });
+  options.addEventListener('mousedown', (e) => e.stopPropagation());
+  options.addEventListener('click', (e) => e.stopPropagation());
+  window.addEventListener('mousedown', (e) => {
+    if (!options.hidden && e.target !== optionsButton && !optionsButton.contains(/** @type {Node} */ (e.target))) {
+      setMenu(false);
+    }
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !options.hidden) {
+      setMenu(false);
+      optionsButton.focus();
+    }
+  });
+
   showTip.addEventListener('change', () => {
     // Nothing about the layout changes, so this does not re-settle anything.
     tooltips = showTip.checked;
@@ -674,6 +737,8 @@
   window.addEventListener('message', (event) => {
     if (event.data.type === 'graph') {
       setGraph(event.data);
+    } else if (event.data.type === 'focus') {
+      focusedId = event.data.id || null;
     }
   });
 
@@ -697,6 +762,10 @@
     if (typeof startup.tooltips === 'boolean') {
       tooltips = startup.tooltips;
       showTip.checked = tooltips;
+    }
+    if (typeof startup.revealOnOpen === 'boolean') {
+      revealOnOpen = startup.revealOnOpen;
+      openReveals.checked = revealOnOpen;
     }
     arranged = startup.arranged === true;
   }
