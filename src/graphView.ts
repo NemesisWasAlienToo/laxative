@@ -98,6 +98,7 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
 <body>
 <div id="hud">
   <input id="filter" type="text" placeholder="Filter notes...">
+  <input id="exclude" type="text" placeholder="Exclude..." title="Hide notes matching any of these terms">
   <div class="menu-anchor">
     <button id="optionsButton" type="button" aria-haspopup="true" aria-expanded="false"
       aria-controls="options">Options <span aria-hidden="true">&#9662;</span></button>

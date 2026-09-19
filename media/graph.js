@@ -7,6 +7,7 @@
   const ctx = canvas.getContext('2d');
   const tip = document.getElementById('tip');
   const filterInput = /** @type {HTMLInputElement} */ (document.getElementById('filter'));
+  const excludeInput = /** @type {HTMLInputElement} */ (document.getElementById('exclude'));
   const showFiles = /** @type {HTMLInputElement} */ (document.getElementById('showFiles'));
   const showTags = /** @type {HTMLInputElement} */ (document.getElementById('showTags'));
   const showTip = /** @type {HTMLInputElement} */ (document.getElementById('showTip'));
@@ -40,6 +41,10 @@
    *  clears the selection the way clicking empty space does everywhere else. */
   let pressedEmpty = null;
   let query = '';
+  let excluded = '';
+  // Split once per keystroke rather than per node per frame.
+  let queryTerms = [];
+  let excludeTerms = [];
   let groupByFile = true;
   let groupByTag = true;
   /** The hover card is useful until it is sitting on top of what you want to
@@ -116,6 +121,7 @@
       positions,
       view: { x: view.x, y: view.y, scale: view.scale },
       query,
+      excluded,
       groupByFile,
       groupByTag,
       tooltips,
@@ -209,7 +215,12 @@
         x = seed[0] + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40;
         y = seed[1] + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40;
       }
-      return { ...n, x, y, hx: x, hy: y, vx: 0, vy: 0, degree: 0 };
+      // Everything a filter looks at, lower-cased once here: this is read for
+      // every node on every frame, so it must not be built on every frame.
+      const search = [n.title, n.excerpt, n.file, ...(n.tags || []).map((t) => '#' + t)]
+        .join('\n')
+        .toLowerCase();
+      return { ...n, search, x, y, hx: x, hy: y, vx: 0, vy: 0, degree: 0 };
     });
     const byId = new Map(nodes.map((n) => [n.id, n]));
     edges = [];
@@ -234,6 +245,7 @@
       burnIn(placed > 0 ? 0.5 : 1, placed === 0);
     }
     saveStateSoon();
+    groupEdgeCache = null;
     focusedId = payload.focus || null;
     // A note that was deleted cannot stay selected.
     selected = new Set(nodes.filter((n) => selected.has(n.id)).map((n) => n.id));
@@ -277,8 +289,16 @@
     annealing = false;
   }
 
-  /** Faint links between notes that share a file or a hashtag. */
+  /**
+   * Faint links between notes that share a file or a hashtag. Asked for by the
+   * physics and by the drawing on every frame they run, so it is built once and
+   * kept until the notes or the two grouping options change.
+   */
+  let groupEdgeCache = null;
   function groupEdges() {
+    if (groupEdgeCache) {
+      return groupEdgeCache;
+    }
     const extra = [];
     const chain = (groups, kind) => {
       for (const group of groups.values()) {
@@ -303,6 +323,7 @@
       }
       chain(byTag, 'tag');
     }
+    groupEdgeCache = extra;
     return extra;
   }
 
@@ -398,16 +419,25 @@
     return 5.5 + Math.sqrt(node.degree) * 3.6;
   }
 
+  /** Search terms in a box, the same way the search view splits them. */
+  function terms(text) {
+    return text
+      .split(/[\s,]+/)
+      .map((term) => term.trim().toLowerCase())
+      .filter((term) => term.length > 0);
+  }
+
+  // Mirrors src/core/search.ts: every filter term has to appear, and any
+  // exclude term hides the note outright.
   function isMatch(node) {
-    if (query === '') {
+    if (queryTerms.length === 0 && excludeTerms.length === 0) {
       return true;
     }
-    return (
-      node.title.toLowerCase().includes(query) ||
-      node.file.toLowerCase().includes(query) ||
-      (node.tags || []).some((tag) => ('#' + tag).includes(query)) ||
-      node.excerpt.toLowerCase().includes(query)
-    );
+    const text = node.search;
+    if (excludeTerms.some((term) => text.includes(term))) {
+      return false;
+    }
+    return queryTerms.every((term) => text.includes(term));
   }
 
   /** Filtered-out notes are hidden outright, not greyed: an edge is only drawn
@@ -416,12 +446,32 @@
     return isMatch(edge.from) && isMatch(edge.to);
   }
 
+  /**
+   * The colours the drawing borrows from the theme. `getComputedStyle` forces a
+   * style recalculation, so it is asked once and again only when VS Code
+   * restyles the page, rather than once per frame.
+   */
+  let theme = null;
+  function readTheme() {
+    const style = getComputedStyle(document.body);
+    theme = {
+      foreground: style.color || '#ccc',
+      focus: style.getPropertyValue('--vscode-focusBorder').trim() || '#3794ff',
+      selection:
+        style.getPropertyValue('--vscode-editor-selectionBackground').trim() ||
+        'rgba(38, 79, 120, 0.8)'
+    };
+  }
+
   function draw() {
+    if (!theme) {
+      readTheme();
+    }
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     if (nodes.length === 0) {
       ctx.save();
       ctx.globalAlpha = 0.6;
-      ctx.fillStyle = getComputedStyle(document.body).color || '#ccc';
+      ctx.fillStyle = theme.foreground;
       ctx.font = '13px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(
@@ -436,11 +486,9 @@
     ctx.translate(view.x, view.y);
     ctx.scale(view.scale, view.scale);
 
-    const style = getComputedStyle(document.body);
-    const foreground = style.color || '#ccc';
-    const focusColour = style.getPropertyValue('--vscode-focusBorder').trim() || '#3794ff';
-    const selectionColour =
-      style.getPropertyValue('--vscode-editor-selectionBackground').trim() || 'rgba(38, 79, 120, 0.8)';
+    const foreground = theme.foreground;
+    const focusColour = theme.focus;
+    const selectionColour = theme.selection;
     const neighbours = new Set();
     if (hovered) {
       neighbours.add(hovered.id);
@@ -550,7 +598,24 @@
 
   let lastReport = '';
 
+  /**
+   * Rendering is on demand. A frame is drawn when something asks for one --
+   * input, a message from the extension, a resize, a theme change -- and the
+   * loop keeps itself going only while the layout is still moving or a drag is
+   * in progress. A graph at rest costs nothing at all, which matters more than
+   * it sounds: the view is kept alive while hidden, and a loop left running
+   * here is paid for by every other part of the window.
+   */
+  let scheduled = false;
+  function wake() {
+    if (!scheduled) {
+      scheduled = true;
+      requestAnimationFrame(frame);
+    }
+  }
+
   function frame() {
+    scheduled = false;
     if (resize() && nodes.length > 0 && !restoredLayout) {
       recentre();
       unsettle(0.4);
@@ -562,7 +627,9 @@
     }
     draw();
     report();
-    requestAnimationFrame(frame);
+    if (!settled || dragging || panning || marquee) {
+      wake();
+    }
   }
 
   /** Reports what is actually on the canvas whenever that changes. */
@@ -805,18 +872,26 @@
     saveStateSoon();
   }, { passive: false });
 
+  // Filtering only hides nodes, so the layout does not need to move.
   filterInput.addEventListener('input', () => {
-    // Filtering only hides nodes, so the layout does not need to move.
     query = filterInput.value.trim().toLowerCase();
+    queryTerms = terms(query);
+    saveStateSoon();
+  });
+  excludeInput.addEventListener('input', () => {
+    excluded = excludeInput.value.trim().toLowerCase();
+    excludeTerms = terms(excluded);
     saveStateSoon();
   });
   showFiles.addEventListener('change', () => {
     groupByFile = showFiles.checked;
+    groupEdgeCache = null;
     unsettle(); // Grouping links are springs, so the layout has to re-settle.
     saveStateSoon();
   });
   showTags.addEventListener('change', () => {
     groupByTag = showTags.checked;
+    groupEdgeCache = null;
     unsettle();
     saveStateSoon();
   });
@@ -905,6 +980,10 @@
     }
     query = startup.query || '';
     filterInput.value = startup.query || '';
+    excluded = startup.excluded || '';
+    excludeInput.value = startup.excluded || '';
+    queryTerms = terms(query);
+    excludeTerms = terms(excluded);
     if (typeof startup.groupByFile === 'boolean') {
       groupByFile = startup.groupByFile;
       showFiles.checked = groupByFile;
@@ -928,7 +1007,41 @@
     arranged = startup.arranged === true;
   }
 
+  // Anything the user does can change the picture, so any input asks for one
+  // frame. Registered in the capture phase: the frame itself runs after the
+  // event's own handlers have updated the state it draws.
+  for (const type of ['mousedown', 'mousemove', 'mouseup', 'wheel', 'keydown', 'input', 'change', 'click']) {
+    window.addEventListener(type, wake, true);
+  }
+  window.addEventListener('message', wake);
+  window.addEventListener('resize', wake);
+
+  // A webview is often laid out after its script has run, and a panel can be
+  // resized without the window being: watch the canvas itself for its size.
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(wake).observe(canvas);
+  } else {
+    let known = '';
+    setInterval(() => {
+      const size = `${canvas.clientWidth}x${canvas.clientHeight}`;
+      if (size !== known) {
+        known = size;
+        wake();
+      }
+    }, 250);
+  }
+
+  // VS Code restyles the page when the colour theme changes.
+  if (typeof MutationObserver !== 'undefined') {
+    const restyled = new MutationObserver(() => {
+      theme = null;
+      wake();
+    });
+    restyled.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+    restyled.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
+  }
+
   resize();
-  frame();
+  wake();
   vscode.postMessage({ type: 'ready' });
 })();

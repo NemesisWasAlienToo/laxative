@@ -25,14 +25,24 @@ describe('the try-it sandbox seed', () => {
     files.set(m[1], m[2]);
   }
 
+  /** Every seeded notes file, by the path try-it.sh writes it to. */
+  const seededFiles = [...files.keys()].filter((path) => path.startsWith('.laxative/'));
   const seeded = files.get('.laxative/notes.json');
-  const notes = parse(seeded ?? '');
+  const notes = seededFiles.flatMap((path) => parse(files.get(path) as string));
 
   it('writes a notes file the store can read', () => {
     assert.ok(seeded, 'try-it.sh seeds .laxative/notes.json');
-    assert.strictEqual(notes.length, 6, 'all six notes survive parsing');
     assert.deepStrictEqual(
-      JSON.parse(seeded as string).notes.map((n: { id: string }) => n.id).sort(),
+      seededFiles.sort(),
+      ['.laxative/ideas.json', '.laxative/notes.json'],
+      'two files, so having several can be tried out'
+    );
+    assert.strictEqual(notes.length, 8, 'all eight notes survive parsing');
+    const seededIds = seededFiles.flatMap((path) =>
+      JSON.parse(files.get(path) as string).notes.map((n: { id: string }) => n.id)
+    );
+    assert.deepStrictEqual(
+      seededIds.sort(),
       notes.map((n) => n.id).sort(),
       'no note is dropped or re-issued an id, so [[refs]] keep pointing somewhere'
     );
@@ -44,6 +54,8 @@ describe('the try-it sandbox seed', () => {
     // eye when you open it.
     const anchoredTo: Record<string, string> = {
       d8m2rk44: 'export async function prime',
+      i9k2p001: 'export async function prime',
+      i9k2p002: 'while (attempt < 3)',
       zz10lost: 'export function read',
       k3f9a2mx: 'set(key: string',
       t7q4zz10: 'evictAll()',
@@ -77,8 +89,10 @@ describe('the try-it sandbox seed', () => {
   it('keeps the written tags in step with the note bodies', () => {
     // The file carries a `tags` array for readability; the store always
     // re-derives it, so a stale one here would quietly mislead whoever edits it.
-    for (const note of JSON.parse(seeded as string).notes) {
-      assert.deepStrictEqual(note.tags, parseTags(note.body), `${note.id} tags`);
+    for (const path of seededFiles) {
+      for (const note of JSON.parse(files.get(path) as string).notes) {
+        assert.deepStrictEqual(note.tags, parseTags(note.body), `${note.id} tags in ${path}`);
+      }
     }
   });
 
@@ -98,6 +112,10 @@ describe('the try-it sandbox seed', () => {
       graph.broken.map((e) => e.to),
       ['nosuchnote'],
       'exactly one dangling reference, the deliberate one'
+    );
+    assert.ok(
+      graph.edges.some((e) => e.from === 'i9k2p002' && e.to === 'p1x8dd02'),
+      'a note in one file can reference a note in the other'
     );
   });
 });

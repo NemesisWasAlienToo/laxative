@@ -165,10 +165,247 @@ describe('panel webview', () => {
   });
 });
 
+describe('notes list webview', () => {
+  const HTML = `
+    <div id="boxes">
+      <button id="toggle" type="button" aria-expanded="false"></button>
+      <div id="fields">
+        <div class="field"><input id="query" type="text"><button class="clear"></button></div>
+        <div class="field" id="excludeField" hidden>
+          <input id="exclude" type="text"><button class="clear"></button>
+        </div>
+      </div>
+    </div>
+    <div id="summary"></div>
+    <div id="list" tabindex="0"></div>
+    <div id="empty" hidden></div>`;
+
+  let harness: Harness;
+  afterEach(() => harness?.destroy());
+
+  const row = (group: string, noteId: string, title: string, description?: string) => ({
+    id: `note:${group}:${noteId}`,
+    noteId,
+    title,
+    description,
+    tooltip: `${title} tooltip`
+  });
+  const byFile = (over: Record<string, unknown> = {}) => ({
+    type: 'list',
+    summary: '3 notes in this workspace.',
+    total: 3,
+    hasFolder: true,
+    groups: [
+      {
+        id: 'file:src/a.ts',
+        kind: 'file',
+        label: 'a.ts',
+        description: 'src · 2',
+        rows: [row('file:src/a.ts', 'n1', 'First'), row('file:src/a.ts', 'n2', 'Second')]
+      },
+      {
+        id: 'file:src/b.ts',
+        kind: 'file',
+        label: 'b.ts',
+        description: 'src · 1',
+        rows: [row('file:src/b.ts', 'n3', 'Third')]
+      }
+    ],
+    ...over
+  });
+
+  const doc = () => harness.window.document;
+  const type = (id: string, value: string) => {
+    const box = doc().getElementById(id);
+    box.value = value;
+    box.dispatchEvent(new harness.window.Event('input'));
+  };
+  const click = (el: any) =>
+    el.dispatchEvent(new harness.window.MouseEvent('click', { bubbles: true }));
+  const press = (key: string, on = 'list') =>
+    doc()
+      .getElementById(on)
+      .dispatchEvent(new harness.window.KeyboardEvent('keydown', { key, bubbles: true }));
+  const sent = (kind: string) => harness.posted.filter((m: any) => m.type === kind);
+  const noteRows = () => [...doc().querySelectorAll('.row.note')] as any[];
+  const selected = () => doc().querySelector('.row.selected')?.dataset.row;
+  const open = (payload = byFile()) => {
+    harness = load('notes.js', HTML, (window) => {
+      // jsdom has no layout, so nothing to scroll.
+      window.HTMLElement.prototype.scrollIntoView = () => undefined;
+    });
+    harness.send(payload);
+  };
+
+  it('draws the groups and their notes, and says what it is showing', () => {
+    open();
+    assert.deepStrictEqual(plain(sent('ready')), [{ type: 'ready' }], 'it announces itself');
+    assert.deepStrictEqual(
+      [...doc().querySelectorAll('.row')].map((el: any) => el.querySelector('.label').textContent),
+      ['a.ts', 'First', 'Second', 'b.ts', 'Third']
+    );
+    assert.strictEqual(doc().getElementById('summary').textContent, '3 notes in this workspace.');
+    assert.strictEqual(noteRows()[0].title, 'First tooltip', 'the hover says where it points');
+  });
+
+  it('opens a note when its row is clicked', () => {
+    open();
+    click(noteRows()[1].querySelector('.label'));
+    assert.deepStrictEqual(plain(sent('activate')), [{ type: 'activate', noteId: 'n2' }]);
+    assert.strictEqual(selected(), 'note:file:src/a.ts:n2', 'and the row is selected');
+  });
+
+  it('runs a row button without also opening the note', () => {
+    open();
+    click(noteRows()[0].querySelector('.action[data-command="laxative.editNote"]'));
+    assert.deepStrictEqual(plain(sent('command')), [
+      { type: 'command', command: 'laxative.editNote', noteId: 'n1' }
+    ]);
+    assert.deepStrictEqual(sent('activate'), []);
+  });
+
+  it('hands right-clicks to VS Code with the note they are about', () => {
+    open();
+    const context = JSON.parse(noteRows()[2].dataset.vscodeContext);
+    assert.strictEqual(context.webviewSection, 'note');
+    assert.strictEqual(context.noteId, 'n3');
+    assert.strictEqual(context.preventDefaultContextMenuItems, true, 'no Cut/Copy/Paste');
+  });
+
+  it('folds a group, and keeps it folded when the list is redrawn', () => {
+    open();
+    const head = doc().querySelector('.row.head');
+    click(head);
+    assert.ok(head.parentElement.classList.contains('folded'));
+    assert.strictEqual(head.getAttribute('aria-expanded'), 'false');
+    assert.deepStrictEqual(sent('activate'), [], 'a group is not a note');
+
+    harness.send(byFile());
+    assert.ok(doc().querySelector('.row.head').parentElement.classList.contains('folded'));
+    assert.deepStrictEqual(plain(harness.state.current.collapsed), ['file:src/a.ts'], 'and across reloads');
+
+    harness.send({ type: 'collapseAll' });
+    assert.strictEqual(doc().querySelectorAll('.group.folded').length, 2);
+  });
+
+  it('moves with the arrow keys, skipping what is folded away', () => {
+    open();
+    press('ArrowDown');
+    assert.strictEqual(selected(), 'file:src/a.ts');
+    press('ArrowLeft');
+    press('ArrowDown');
+    assert.strictEqual(selected(), 'file:src/b.ts', 'the folded notes are stepped over');
+    press('ArrowDown');
+    press('Enter');
+    assert.deepStrictEqual(plain(sent('activate')), [{ type: 'activate', noteId: 'n3' }]);
+    press('ArrowLeft');
+    assert.strictEqual(selected(), 'file:src/b.ts', 'left from a note goes to its group');
+  });
+
+  it('reveals a note, unfolding its group to do it', () => {
+    open();
+    click(doc().querySelector('.row.head'));
+    harness.send({ type: 'reveal', noteId: 'n2' });
+    assert.strictEqual(selected(), 'note:file:src/a.ts:n2');
+    assert.ok(!doc().querySelector('.group').classList.contains('folded'));
+  });
+
+  it('keeps the selection when the list is redrawn', () => {
+    open();
+    click(noteRows()[2]);
+    harness.send(byFile());
+    assert.strictEqual(selected(), 'note:file:src/b.ts:n3');
+  });
+
+  it('asks the extension to search as you type, with the exclude box behind a toggle', () => {
+    open();
+    type('query', 'cache');
+    assert.deepStrictEqual(plain(sent('search').at(-1)), {
+      type: 'search',
+      query: 'cache',
+      exclude: ''
+    });
+
+    const field = doc().getElementById('excludeField');
+    assert.strictEqual(field.hidden, true, 'hidden until asked for');
+    click(doc().getElementById('toggle'));
+    assert.strictEqual(field.hidden, false);
+    type('exclude', 'test');
+    assert.deepStrictEqual(plain(sent('search').at(-1)), {
+      type: 'search',
+      query: 'cache',
+      exclude: 'test'
+    });
+  });
+
+  it('shows a search the extension set, without sending it straight back', () => {
+    open();
+    harness.send({ type: 'search', query: 'cache', exclude: 'test' });
+    assert.strictEqual(doc().getElementById('query').value, 'cache');
+    assert.strictEqual(doc().getElementById('exclude').value, 'test');
+    assert.strictEqual(doc().getElementById('excludeField').hidden, false, 'the exclude is shown');
+    assert.deepStrictEqual(sent('search'), [], 'no echo');
+
+    harness.send({ type: 'search', query: '', exclude: '' });
+    assert.strictEqual(doc().getElementById('query').value, '', 'and clearing empties it');
+  });
+
+  it('goes from the search box into the results with the down arrow', () => {
+    open();
+    press('ArrowDown', 'query');
+    assert.strictEqual(selected(), 'file:src/a.ts');
+  });
+
+  it('offers to add a note when there are none, instead of an empty list', () => {
+    open(byFile({ groups: [], total: 0, summary: '' }));
+    assert.strictEqual(doc().getElementById('list').hidden, true);
+    assert.strictEqual(doc().getElementById('boxes').hidden, true, 'nothing to search');
+    const buttons = [...doc().querySelectorAll('#empty .welcome')] as any[];
+    assert.deepStrictEqual(
+      buttons.map((b) => b.textContent),
+      ['Add note at cursor', 'Import notes']
+    );
+    click(buttons[0]);
+    assert.deepStrictEqual(plain(sent('command')), [{ type: 'command', command: 'laxative.addNote' }]);
+
+    harness.send(byFile({ groups: [], total: 0, summary: '', hasFolder: false }));
+    assert.match(doc().getElementById('empty').textContent, /Open a folder/);
+    assert.strictEqual(doc().querySelectorAll('#empty .welcome').length, 0);
+  });
+
+  it('shows a file with its icon from the icon theme, and a plain page without one', () => {
+    const groups = plain(byFile().groups);
+    groups[0].icon = { kind: 'font', glyph: '\uE0A5', font: 'seti', color: '#519aba', size: '150%' };
+    groups[1].icon = { kind: 'image', src: 'https://theme/ts.svg' };
+    open(byFile({ groups }));
+    const [font, image] = [...doc().querySelectorAll('.row.head .icon')] as any[];
+    assert.strictEqual(font.textContent, '\uE0A5');
+    assert.match(font.style.fontFamily, /laxative-icons-seti/);
+    assert.strictEqual(font.style.fontSize, '150%');
+    assert.ok(font.style.color, 'in the colour the theme gives it');
+    assert.strictEqual(image.querySelector('img').getAttribute('src'), 'https://theme/ts.svg');
+
+    harness.send(byFile());
+    assert.ok(doc().querySelector('.row.head .icon svg'), 'no theme: the drawn page icon');
+  });
+
+  it('does nothing at all while the list scrolls', () => {
+    open();
+    const before = harness.posted.length;
+    const html = doc().getElementById('list').innerHTML;
+    for (let i = 0; i < 50; i++) {
+      doc().getElementById('list').dispatchEvent(new harness.window.Event('scroll'));
+    }
+    assert.strictEqual(harness.posted.length, before, 'nothing is asked of the extension');
+    assert.strictEqual(doc().getElementById('list').innerHTML, html, 'and nothing is redrawn');
+  });
+});
+
 describe('graph webview', () => {
   const HTML = `
     <div id="hud">
       <input id="filter" type="text">
+      <input id="exclude" type="text">
       <div class="menu-anchor">
         <button id="optionsButton" type="button" aria-expanded="false">Options</button>
         <div id="options" hidden>
@@ -198,13 +435,21 @@ describe('graph webview', () => {
       }
       const calls: Record<string, number> = {};
       const arcs: unknown[][] = [];
+      const context: Record<string, unknown> = { calls, arcs, lastFrameArcs: 0 };
       const record = (name: string) => (...args: unknown[]) => {
         calls[name] = (calls[name] ?? 0) + 1;
-        if (name === 'arc' && options.recordArcs) {
-          arcs.push(args);
+        // Every frame starts by clearing, so this counts what the most recent
+        // frame drew -- however long ago that frame was.
+        if (name === 'clearRect') {
+          context.lastFrameArcs = 0;
+        }
+        if (name === 'arc') {
+          context.lastFrameArcs = (context.lastFrameArcs as number) + 1;
+          if (options.recordArcs) {
+            arcs.push(args);
+          }
         }
       };
-      const context: Record<string, unknown> = { calls, arcs };
       for (const name of [
         'clearRect', 'save', 'restore', 'translate', 'scale', 'beginPath', 'arc', 'fill',
         'stroke', 'moveTo', 'lineTo', 'closePath', 'setLineDash', 'fillText', 'setTransform',
@@ -281,30 +526,69 @@ describe('graph webview', () => {
   });
 
   it('hides filtered-out notes instead of greying them', async () => {
-    const size = { width: 800, height: 600 };
-    harness = load('graph.js', HTML, prepareCanvas(size));
+    harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
     harness.send(graph);
     await delay(150);
-
-    const perFrame = () => {
-      const calls = harness.window.__context.calls;
-      const before = { arc: calls.arc ?? 0, frames: calls.clearRect ?? 0 };
-      return async () => {
-        await delay(150);
-        const arcs = (calls.arc ?? 0) - before.arc;
-        const frames = (calls.clearRect ?? 0) - before.frames;
-        return frames > 0 ? arcs / frames : 0;
-      };
-    };
-
-    const unfiltered = await (perFrame())();
-    assert.ok(unfiltered > 1.5, `both notes drawn each frame (${unfiltered})`);
+    const drawn = () => harness.window.__context.lastFrameArcs as number;
+    assert.strictEqual(drawn(), 2, 'both notes are drawn');
 
     const filter = harness.window.document.getElementById('filter');
     filter.value = 'First';
-    filter.dispatchEvent(new harness.window.Event('input'));
-    const filtered = await (perFrame())();
-    assert.ok(filtered > 0.5 && filtered < 1.5, `only the match is drawn (${filtered})`);
+    filter.dispatchEvent(new harness.window.Event('input', { bubbles: true }));
+    await delay(100);
+    assert.strictEqual(drawn(), 1, 'only the match is drawn: the other is gone, not dimmed');
+  });
+
+  it('stops drawing once there is nothing left to animate', async () => {
+    // The render loop used to run at full frame rate for as long as the view
+    // existed -- redrawing everything, recomputing styles and rebuilding the
+    // link lists sixty times a second, in a view that is kept alive while
+    // hidden. That is a permanent tax on the whole window, and it is what made
+    // scrolling an unrelated list stutter.
+    harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+    harness.send(graph);
+    await delay(400); // more than long enough to lay out and settle
+
+    const calls = harness.window.__context.calls;
+    const before = calls.clearRect ?? 0;
+    await delay(500);
+    const idleFrames = (calls.clearRect ?? 0) - before;
+    assert.ok(idleFrames <= 1, `an idle graph draws nothing (it drew ${idleFrames} frames in 500ms)`);
+
+    // ...and wakes up the moment there is something to show.
+    const filter = harness.window.document.getElementById('filter');
+    filter.value = 'First';
+    filter.dispatchEvent(new harness.window.Event('input', { bubbles: true }));
+    await delay(100);
+    assert.ok((calls.clearRect ?? 0) - before - idleFrames >= 1, 'a change is drawn straight away');
+  });
+
+  it('hides notes matching the exclude box, whatever the filter says', async () => {
+    harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+    harness.send(graph); // "First" in src/a.ts #perf, "Second" in src/b.ts #perf
+    await delay(150);
+
+    const drawn = () => harness.window.__context.lastFrameArcs as number;
+    const type = async (id: string, value: string) => {
+      const box = harness.window.document.getElementById(id);
+      box.value = value;
+      box.dispatchEvent(new harness.window.Event('input', { bubbles: true }));
+      await delay(100);
+    };
+
+    assert.strictEqual(drawn(), 2, 'both notes to begin with');
+
+    await type('exclude', 'src/b.ts');
+    assert.strictEqual(drawn(), 1, 'excluding by path hides that note');
+
+    await type('filter', 'perf');
+    assert.strictEqual(drawn(), 1, 'an exclude still wins over a matching filter');
+
+    await type('exclude', '');
+    assert.strictEqual(drawn(), 2, 'clearing it brings the note back');
+
+    await delay(300); // persisting is debounced
+    assert.strictEqual(harness.state.current.excluded, '', 'the exclude is remembered');
   });
 
   it('opens a note on double click only, so dragging one never opens it', async () => {

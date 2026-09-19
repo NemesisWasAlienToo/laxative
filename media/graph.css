@@ -27,7 +27,16 @@ body {
   border-radius: 3px;
   font-family: inherit;
 }
-#filter:focus { outline: 1px solid var(--vscode-focusBorder); }
+#exclude {
+  width: 10rem;
+  padding: 0.3rem 0.5rem;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  font-family: inherit;
+}
+#filter:focus, #exclude:focus { outline: 1px solid var(--vscode-focusBorder); }
 .menu-anchor { position: relative; }
 #optionsButton, #tidy {
   padding: 0.25rem 0.6rem;

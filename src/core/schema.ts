@@ -44,8 +44,23 @@ export function sortNotes(notes: Note[]): Note[] {
   );
 }
 
+/** Only the fields that belong on disk, in a fixed order, so diffs stay stable. */
+function onDisk(note: Note): Note {
+  return {
+    id: note.id,
+    title: note.title,
+    body: note.body,
+    file: note.file,
+    line: note.line,
+    character: note.character,
+    tags: note.tags,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt
+  };
+}
+
 export function serialize(notes: Note[]): string {
-  const doc: NoteStoreFile = { version: STORE_VERSION, notes: sortNotes(notes) };
+  const doc: NoteStoreFile = { version: STORE_VERSION, notes: sortNotes(notes).map(onDisk) };
   return JSON.stringify(doc, null, 2) + '\n';
 }
 

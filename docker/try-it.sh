@@ -31,7 +31,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$SANDBOX/home" "$SANDBOX/project/src" "$SANDBOX/project/.laxative"
+mkdir -p "$SANDBOX/home" "$SANDBOX/project/src" "$SANDBOX/project/.laxative" "$SANDBOX/project/.vscode"
 
 cat > "$SANDBOX/project/src/cache.ts" <<'SAMPLE'
 export class Cache {
@@ -180,6 +180,53 @@ cat > "$SANDBOX/project/.laxative/notes.json" <<'SAMPLE'
 }
 SAMPLE
 
+# A second note file, so having more than one can be tried out: both are
+# switched on, and the sandbox settings name them.
+cat > "$SANDBOX/project/.laxative/ideas.json" <<'SAMPLE'
+{
+  "version": 1,
+  "notes": [
+    {
+      "id": "i9k2p001",
+      "title": "Idea: cache the warm set between runs",
+      "body": "Idea: cache the warm set between runs\n\nPersist the keys the warmer touched, so a restart does not start cold.\nSketched only; nothing depends on this yet.\n\n#idea\n",
+      "file": "src/api.ts",
+      "line": 5,
+      "character": 0,
+      "tags": [
+        "idea"
+      ],
+      "createdAt": "2026-09-01T09:00:00.000Z",
+      "updatedAt": "2026-09-01T09:00:00.000Z"
+    },
+    {
+      "id": "i9k2p002",
+      "title": "Idea: back off before retrying",
+      "body": "Idea: back off before retrying\n\nThree immediate attempts is the same attempt three times. Relates to\n[[p1x8dd02|the retry loop]] in the shared notes.\n\n#idea #perf\n",
+      "file": "src/worker.ts",
+      "line": 5,
+      "character": 6,
+      "tags": [
+        "idea",
+        "perf"
+      ],
+      "createdAt": "2026-09-01T09:00:00.000Z",
+      "updatedAt": "2026-09-01T09:00:00.000Z"
+    }
+  ]
+}
+SAMPLE
+
+cat > "$SANDBOX/project/.vscode/settings.json" <<'SAMPLE'
+{
+  "laxative.noteFiles": [
+    { "name": "shared", "path": ".laxative/notes.json" },
+    { "name": "ideas", "path": ".laxative/ideas.json" }
+  ],
+  "laxative.defaultNoteFile": "shared"
+}
+SAMPLE
+
 cat > "$SANDBOX/project/README.md" <<'SAMPLE'
 # Sample project
 
@@ -197,10 +244,17 @@ them there.
 3. **`src/worker.ts` line 6** - that note has a list and a fenced code block,
    for checking markdown rendering; `src/api.ts` line 10 has a reference that
    points at nothing, for checking how a dangling `[[ref]]` is rendered.
-4. **The Laxative view** in the activity bar - six notes over three files.
+4. **Search**: press `Ctrl+Alt+Shift+M` (or click the box at the top of the
+   Notes list) and type `retry` - the list narrows as you type. Add ` -worker`
+   to exclude, press Down to move into the results, Escape in the box to clear.
+5. **Two note files**: eight notes come from `shared` and `ideas`. Run
+   **Laxative: Select Note Files**, untick *ideas*, and watch the two `#idea`
+   notes leave the list, the graph and the search at once. Tick it back on.
+   The Notes view can also **Group by Note File**.
+6. **The Laxative view** in the activity bar - six notes over three files.
    Switch it to **Group by Hashtag**: `#bug` and `#perf/hot-path` have two
    notes each, and `load() is a stub` sits under *untagged*.
-5. **The Note Graph** tab in the bottom panel, next to Terminal:
+7. **The Note Graph** tab in the bottom panel, next to Terminal:
    - three node colours, one per file;
    - *Race with the cache warmer* is the biggest node - it has four links;
    - solid arrows are `[[refs]]`, faint dashes join notes sharing a file or tag;
@@ -220,6 +274,8 @@ them there.
      apart: they stay there, the link stretched between them;
    - close the panel and reopen it: same layout, no animation at all;
    - type in the filter box: notes that do not match disappear rather than fade;
+   - type `worker` in the **Exclude** box: anything mentioning it is hidden,
+     whatever the filter says;
    - **double-click** a node to open it - a single drag must never open one.
 
 ## Then try it yourself

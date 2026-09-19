@@ -32,7 +32,47 @@
           "type": "string",
           "default": ".laxative/notes.json",
           "scope": "resource",
-          "markdownDescription": "Where notes are stored, relative to the workspace root. Commit this file to git to share notes with your team, or point it at an ignored path (for example `.laxative/notes.local.json`) to keep them to yourself. Run **Laxative: Configure Storage** to change it with a guided prompt that also moves your existing notes."
+          "markdownDescription": "Where notes are stored, relative to the workspace root, when `#laxative.noteFiles#` is empty. Commit this file to git to share notes with your team, or point it at an ignored path (for example `.laxative/notes.local.json`) to keep them to yourself."
+        },
+        "laxative.noteFiles": {
+          "type": "array",
+          "default": [],
+          "scope": "resource",
+          "items": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "What you call this file. Defaults to the file name."
+              },
+              "path": {
+                "type": "string",
+                "description": "Path relative to the workspace root."
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether its notes are shown."
+              }
+            },
+            "additionalProperties": false
+          },
+          "markdownDescription": "Note files, each with a name of your own. Any number can be switched on at once, and the notes from all of them appear together in the list, the graph, the search and the editor. Leave this empty to use the single `#laxative.storeFile#`.\n\n```json\n[\n  { \"name\": \"team\", \"path\": \".laxative/notes.json\" },\n  { \"name\": \"private\", \"path\": \".laxative/notes.local.json\", \"enabled\": false }\n]\n```\n\nRun **Laxative: Select Note Files** to switch them on and off without editing this."
+        },
+        "laxative.defaultNoteFile": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Which note file is offered first for a new note, by name. Empty means the one used last time. With `#laxative.askWhichNoteFile#` off, new notes go straight to it."
+        },
+        "laxative.askWhichNoteFile": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "With more than one note file switched on, ask which one a new note belongs to. The likely one is listed first, so Enter accepts it. Turn this off to send new notes to `#laxative.defaultNoteFile#` without asking."
         },
         "laxative.listClickAction": {
           "type": "array",
@@ -99,7 +139,9 @@
         {
           "id": "laxative.notesView",
           "name": "Notes",
-          "icon": "media/activity-bar.svg"
+          "type": "webview",
+          "icon": "media/activity-bar.svg",
+          "contextualTitle": "Laxative"
         }
       ],
       "laxativeGraph": [
@@ -111,12 +153,6 @@
         }
       ]
     },
-    "viewsWelcome": [
-      {
-        "view": "laxative.notesView",
-        "contents": "No notes yet.\n\nPut the cursor on a line of code and add a note. Notes are stored in a git-friendly file and never touch your source.\n[Add note at cursor](command:laxative.addNote)\n[Import notes](command:laxative.import)"
-      }
-    ],
     "commands": [
       {
         "command": "laxative.addNote",
@@ -233,6 +269,45 @@
         "command": "laxative.activateNote",
         "title": "Open Note from List",
         "category": "Laxative"
+      },
+      {
+        "command": "laxative.selectNoteFiles",
+        "title": "Select Note Files...",
+        "category": "Laxative",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "laxative.addNoteFile",
+        "title": "Add Note File...",
+        "category": "Laxative"
+      },
+      {
+        "command": "laxative.removeNoteFile",
+        "title": "Remove Note File...",
+        "category": "Laxative"
+      },
+      {
+        "command": "laxative.moveNoteToFile",
+        "title": "Move Note to Another File...",
+        "category": "Laxative"
+      },
+      {
+        "command": "laxative.groupByStore",
+        "title": "Group Notes by Note File",
+        "category": "Laxative",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "laxative.clearSearch",
+        "title": "Clear Note Search",
+        "category": "Laxative",
+        "icon": "$(search-stop)"
+      },
+      {
+        "command": "laxative.collapseAll",
+        "title": "Collapse All",
+        "category": "Laxative",
+        "icon": "$(collapse-all)"
       }
     ],
     "menus": {
@@ -264,6 +339,18 @@
         {
           "command": "laxative.activateNote",
           "when": "false"
+        },
+        {
+          "command": "laxative.setSearch",
+          "when": "false"
+        },
+        {
+          "command": "laxative.clearSearch",
+          "when": "laxative.hasSearch"
+        },
+        {
+          "command": "laxative.collapseAll",
+          "when": "false"
         }
       ],
       "editor/context": [
@@ -282,11 +369,6 @@
           "command": "laxative.addNote",
           "when": "view == laxative.notesView",
           "group": "navigation@1"
-        },
-        {
-          "command": "laxative.searchNotes",
-          "when": "view == laxative.notesView",
-          "group": "navigation@2"
         },
         {
           "command": "laxative.showGraph",
@@ -320,7 +402,7 @@
         },
         {
           "command": "laxative.groupByFile",
-          "when": "view == laxative.notesView && laxative.groupBy == tag",
+          "when": "view == laxative.notesView && laxative.groupBy == store",
           "group": "navigation@0"
         },
         {
@@ -337,33 +419,78 @@
           "command": "laxative.configureStorage",
           "when": "view == laxative.notesView",
           "group": "1_store@4"
+        },
+        {
+          "command": "laxative.groupByStore",
+          "when": "view == laxative.notesView && laxative.groupBy == tag",
+          "group": "navigation@0"
+        },
+        {
+          "command": "laxative.selectNoteFiles",
+          "when": "view == laxative.notesView",
+          "group": "1_store@0"
+        },
+        {
+          "command": "laxative.addNoteFile",
+          "when": "view == laxative.notesView",
+          "group": "1_store@4"
+        },
+        {
+          "command": "laxative.removeNoteFile",
+          "when": "view == laxative.notesView",
+          "group": "1_store@5"
+        },
+        {
+          "command": "laxative.clearSearch",
+          "when": "view == laxative.notesView && laxative.hasSearch",
+          "group": "navigation@3"
+        },
+        {
+          "command": "laxative.searchNotes",
+          "when": "view == laxative.notesView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "laxative.collapseAll",
+          "when": "view == laxative.notesView",
+          "group": "navigation@9"
         }
       ],
-      "view/item/context": [
+      "webview/context": [
         {
           "command": "laxative.revealNote",
-          "when": "view == laxative.notesView && viewItem == laxative",
-          "group": "inline@1"
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
+          "group": "0_open@1"
+        },
+        {
+          "command": "laxative.openNote",
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
+          "group": "0_open@2"
         },
         {
           "command": "laxative.editNote",
-          "when": "view == laxative.notesView && viewItem == laxative",
-          "group": "inline@2"
-        },
-        {
-          "command": "laxative.deleteNote",
-          "when": "view == laxative.notesView && viewItem == laxative",
-          "group": "1_mod@1"
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
+          "group": "0_open@3"
         },
         {
           "command": "laxative.copyReference",
-          "when": "view == laxative.notesView && viewItem == laxative",
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
+          "group": "1_mod@1"
+        },
+        {
+          "command": "laxative.moveNoteToFile",
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
           "group": "1_mod@2"
         },
         {
+          "command": "laxative.deleteNote",
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
+          "group": "2_delete@1"
+        },
+        {
           "command": "laxative.filterByTag",
-          "when": "view == laxative.notesView && viewItem == laxativeTag",
-          "group": "inline@1"
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'tag'",
+          "group": "0_open@1"
         }
       ]
     },
@@ -384,6 +511,16 @@
         "key": "ctrl+alt+j",
         "mac": "cmd+alt+j",
         "when": "editorTextFocus && laxative.hasNoteAtCursor"
+      },
+      {
+        "command": "laxative.showGraph",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g"
+      },
+      {
+        "command": "workbench.view.extension.laxativeGraph",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g"
       }
     ]
   },
