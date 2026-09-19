@@ -13,6 +13,7 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
   private readonly inline: vscode.TextEditorDecorationType;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly lensChanged = new vscode.EventEmitter<void>();
+  private hasNoteAtCursor?: boolean;
   readonly onDidChangeCodeLenses = this.lensChanged.event;
 
   constructor(
@@ -40,6 +41,12 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
       vscode.languages.registerCodeLensProvider({ scheme: 'file' }, this),
       vscode.window.onDidChangeVisibleTextEditors(() => this.refreshAll()),
       vscode.window.onDidChangeTextEditorSelection((e) => this.updateCursorContext(e.textEditor)),
+      // Switching between two editors that are both on screen moves no cursor.
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        if (editor) {
+          this.updateCursorContext(editor);
+        }
+      }),
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration('laxative')) {
           this.refreshAll();
@@ -52,12 +59,18 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
     );
   }
 
+  /**
+   * Runs on every cursor movement, so every keystroke. Setting a context key
+   * is a round trip to the workbench that re-evaluates menus and keybindings,
+   * so it is only done when the answer has actually changed.
+   */
   private updateCursorContext(editor: vscode.TextEditor): void {
-    void vscode.commands.executeCommand(
-      'setContext',
-      'laxative.hasNoteAtCursor',
-      this.notesAt(editor).length > 0
-    );
+    const has = this.notesAt(editor).length > 0;
+    if (has === this.hasNoteAtCursor) {
+      return;
+    }
+    this.hasNoteAtCursor = has;
+    void vscode.commands.executeCommand('setContext', 'laxative.hasNoteAtCursor', has);
   }
 
   /** Notes on the line the cursor currently sits on. */

@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.7.0
+
+- **Notes can be split across several files**, each with a name you choose, and
+  any combination of them can be switched on at once. `laxative.noteFiles` lists
+  them; **Laxative: Select Note Files** switches them on and off, **Add Note
+  File...** adds one, and **Remove Note File...** takes one off the list without
+  touching the file on disk. Everything switched on is shown together — the
+  list, the graph, the search, the gutter markers and the hover — and each note
+  is written back to the file it came from, so switching one file off never
+  rewrites another.
+  - The Notes view can group **by note file**, alongside by file and by hashtag.
+  - **Move Note to Another File...** moves a note between files, keeping its id
+    so `[[references]]` to it still resolve.
+  - **Adding a note asks which file it belongs to** when more than one is on,
+    with the file you used last listed first so Enter accepts it.
+    `laxative.askWhichNoteFile` turns the question off, and
+    `laxative.defaultNoteFile` pins the answer.
+  - Leaving `laxative.noteFiles` empty keeps the previous single-file behaviour
+    with `laxative.storeFile`, so existing workspaces need no migration.
+- **Scrolling the Notes list no longer pins a CPU core.** The list was a
+  VS Code TreeView, and for every tree row it draws the workbench builds that
+  row's right-click menu from the `view/item/context` entries of *every*
+  installed extension, on the window's main thread, on every scroll event. With
+  GitLens installed that is over a thousand entries per row; profiled, it was
+  the whole cost of scrolling a list of 64 notes. The list is now drawn by the
+  extension itself, so scrolling is the browser's own and runs no code at all,
+  and a menu is only built when you right-click. It looks and works as before —
+  groups fold, the group you are in stays pinned at the top, rows have Go to
+  Code and Edit buttons, arrow keys and Enter work, and right-click gives the
+  same menu. Files keep the icon your **file icon theme** gives them: a webview
+  is not handed the theme, so the extension reads the theme's own definition
+  (font glyphs like Seti's, or images like Material Icon Theme's) and follows
+  `workbench.iconTheme` when you change it.
+- **The search box is part of the Notes list**, the way the built-in search
+  has its box above its results: type, and the list under it narrows, keeping
+  whatever grouping it has, with a line saying how many of how many matched.
+  `Ctrl+Alt+Shift+M` or the magnifier puts the cursor in it, Down or Enter moves
+  into the results, Escape empties it, and **Clear Note Search** appears on the
+  toolbar while a search is active. Every term has to match; `-term` excludes,
+  so `cache -test -#wip` works in one box, and the chevron opens a separate
+  exclude box. Titles, bodies, file paths and hashtags are all searched.
+- `Ctrl+Alt+G` (`Cmd+Alt+G`) opens the note graph, alongside the shortcuts for
+  adding, searching and opening a note. It is bound to the panel's own open
+  command as well, so the **Note Graph** tab shows it in its tooltip.
+- The notes taken on this repository with the extension itself are no longer
+  packaged into the `.vsix`.
+- **Fixed the whole window stuttering once the graph had been opened.** The
+  graph's render loop ran at full frame rate for as long as the view existed —
+  redrawing every note and link, recomputing styles and rebuilding its link
+  lists sixty times a second — and the view is kept alive while hidden, so this
+  carried on with Terminal in front. It is what made scrolling the Notes list
+  lag. Rendering is now on demand: a frame is drawn when something changes, the
+  loop runs only while the layout is moving or something is being dragged, and a
+  graph at rest costs nothing. Theme colours are read when the theme changes
+  rather than per frame, and the link lists are built once per change.
+- Moving the cursor no longer sends a context update to the workbench on every
+  keystroke, only when the answer changes; and looking notes up by id or by file
+  is an index lookup rather than a scan of every note.
+- Changing the note files no longer loads and redraws everything twice.
+- **The Notes list scrolls smoothly again.** Groups are asked for their contents
+  as they scroll into view, and four things were being paid for on every one of
+  those calls:
+  - every row carried a tooltip holding the whole note body, and every row is
+    sent across to the workbench as it appears. Tooltips are now built only for
+    the row actually being hovered (`resolveTreeItem`);
+  - the notes were filtered and grouped again for each group; that now happens
+    once per change;
+  - a search split its terms again for every note it tested. Compiling the query
+    once made the same filtering work about four times faster, and each note's
+    searchable text is now built once instead of per keystroke;
+  - each file row carried a URI built from a workspace-relative path, so the
+    workbench looked up a file that does not exist — and asked every decoration
+    provider about it — once per row. It now carries the real file.
+- Fixed a note filed under two hashtags being drawn twice with the same row id,
+  which a tree cannot render reliably.
+- **An exclude box** in both the search view and the graph's filter. Every
+  search term has to match; any exclude term hides the note. Both look at the
+  title, the body, the file path and the hashtags.
+
 ## 0.6.7
 
 - Select several notes in the graph and move them as one. Ctrl/Cmd+click picks

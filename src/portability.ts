@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { NoteStore } from './store';
+import { pickNoteFile } from './storageSettings';
 import { Note } from './core/types';
 import { parse, serialize } from './core/schema';
 
@@ -84,6 +85,13 @@ export async function importNotes(store: NoteStore): Promise<void> {
     void vscode.window.showWarningMessage('Laxative: that file contains no notes.');
     return;
   }
+  // With several note files switched on, the notes have to land in one of them.
+  const target = await pickNoteFile(store, {
+    title: `Import ${incoming.length} notes into which note file?`
+  });
+  if (!target) {
+    return;
+  }
   const mode = await vscode.window.showQuickPick(
     [
       {
@@ -93,7 +101,7 @@ export async function importNotes(store: NoteStore): Promise<void> {
       },
       {
         label: 'Replace',
-        description: 'Discard existing notes and use only the imported ones',
+        description: `Discard the notes in ${target} and use only the imported ones`,
         value: 'replace' as const
       }
     ],
@@ -102,7 +110,7 @@ export async function importNotes(store: NoteStore): Promise<void> {
   if (!mode) {
     return;
   }
-  const count = await store.importNotes(incoming, mode.value);
+  const count = await store.importNotes(incoming, mode.value, target);
   void vscode.window.showInformationMessage(
     mode.value === 'merge'
       ? `Laxative: imported ${count} new notes (${incoming.length - count} already existed).`

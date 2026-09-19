@@ -114,7 +114,17 @@ describe('Laxative extension', function () {
     const bound = new Map(keybindings.map((binding) => [binding.command, binding.key]));
     assert.strictEqual(bound.get('laxative.addNote'), 'ctrl+alt+m');
     assert.strictEqual(bound.get('laxative.searchNotes'), 'ctrl+alt+shift+m');
+    assert.strictEqual(bound.get('laxative.showGraph'), 'ctrl+alt+g');
+    assert.strictEqual(
+      bound.get('workbench.view.extension.laxativeGraph'),
+      'ctrl+alt+g',
+      'the panel tab shows the shortcut of the command that opens it, so that has the key too'
+    );
     assert.ok(bound.has('laxative.notesAtCursor'));
+    for (const binding of keybindings) {
+      const mac = (binding as { mac?: string }).mac;
+      assert.ok(mac && mac.startsWith('cmd+'), `${binding.command} has a mac binding`);
+    }
   });
 
   it('registers its commands', async () => {
@@ -611,6 +621,377 @@ describe('Laxative extension', function () {
     it('registers the storage configuration command', async () => {
       const commands = await vscode.commands.getCommands(true);
       assert.ok(commands.includes('laxative.configureStorage'));
+    });
+  });
+
+  describe('the notes list', () => {
+    const rows = async (): Promise<{ id: string; label: string; group?: string }[]> =>
+      ((await vscode.commands.executeCommand('laxative._notes')) as {
+        rows: { id: string; label: string; group?: string }[];
+      }).rows;
+
+    afterEach(async () => {
+      await vscode.commands.executeCommand('laxative.groupByFile');
+    });
+
+    it('gives every row its own id, including a note filed under two hashtags', async () => {
+      // A note with two hashtags is drawn under both, and a tree that is handed
+      // the same id twice does not render reliably.
+      await writeStore([
+        makeNote({ id: 'twotag01', title: 'Both', body: 'Both #bug #perf' }),
+        makeNote({ id: 'onetag01', title: 'One', body: 'One #bug', line: 3 })
+      ]);
+      await vscode.commands.executeCommand('laxative.groupByTag');
+
+      const drawn = await rows();
+      const ids = drawn.map((row) => row.id);
+      assert.deepStrictEqual(
+        [...new Set(ids)].length,
+        ids.length,
+        `every row has its own id: ${ids.join(', ')}`
+      );
+      const both = drawn.filter((row) => row.label === 'Both');
+      assert.deepStrictEqual(
+        both.map((row) => row.group).sort(),
+        ['#bug', '#perf'],
+        'and the note really is drawn under both of its hashtags'
+      );
+    });
+
+    it('keeps the notes of a file in the order they appear in it', async () => {
+      await writeStore([
+        makeNote({ id: 'order003', title: 'Third', line: 30 }),
+        makeNote({ id: 'order001', title: 'First', line: 1 }),
+        makeNote({ id: 'order002', title: 'Second', line: 8 })
+      ]);
+      const listed = (await rows()).filter((row) => row.group).map((row) => row.label);
+      assert.deepStrictEqual(listed, ['First', 'Second', 'Third']);
+    });
+  });
+
+  describe('searching', () => {
+    const visible = async (): Promise<string[]> =>
+      ((await vscode.commands.executeCommand('laxative._notes')) as { visible: string[] }).visible;
+    const setSearch = (query: string, exclude?: string) =>
+      vscode.commands.executeCommand('laxative.setSearch', { query, exclude });
+
+    beforeEach(async () => {
+      // Titles as well as bodies: makeNote's default title mentions the cache,
+      // which would match every search for it.
+      await writeStore([
+        makeNote({
+          id: 'srch0001',
+          title: 'Cache warmer race',
+          body: 'Cache warmer race',
+          file: 'src/app.ts'
+        }),
+        makeNote({
+          id: 'srch0002',
+          title: 'Cache eviction',
+          body: 'Cache eviction, covered by a test',
+          file: 'test/app.test.ts'
+        }),
+        makeNote({
+          id: 'srch0003',
+          title: 'Parsing the header',
+          body: 'Parsing the header #wip',
+          file: 'src/other.ts'
+        })
+      ]);
+    });
+
+    afterEach(async () => {
+      await vscode.commands.executeCommand('laxative.clearSearch');
+    });
+
+    it('narrows the Notes list instead of opening a list of its own', async () => {
+      assert.deepStrictEqual((await visible()).sort(), ['srch0001', 'srch0002', 'srch0003']);
+
+      await setSearch('cache');
+      assert.deepStrictEqual(
+        (await visible()).sort(),
+        ['srch0001', 'srch0002'],
+        'the list shows what the search matched'
+      );
+
+      await setSearch('cache', 'test');
+      assert.deepStrictEqual(
+        await visible(),
+        ['srch0001'],
+        'and the exclude box takes the test file back out'
+      );
+
+      await setSearch('cache -test');
+      assert.deepStrictEqual(
+        await visible(),
+        ['srch0001'],
+        'a minus in the search itself excludes too, so one box can do both'
+      );
+
+      await setSearch('', '#wip');
+      assert.deepStrictEqual(
+        (await visible()).sort(),
+        ['srch0001', 'srch0002'],
+        'excluding on its own is a search too'
+      );
+
+      await vscode.commands.executeCommand('laxative.clearSearch');
+      assert.strictEqual((await visible()).length, 3, 'clearing brings the whole list back');
+    });
+
+    it('searches the body, the path and the hashtags, not just titles', async () => {
+      await setSearch('other.ts');
+      assert.deepStrictEqual(await visible(), ['srch0003'], 'by path');
+
+      await setSearch('#wip');
+      assert.deepStrictEqual(await visible(), ['srch0003'], 'by hashtag');
+
+      await setSearch('header');
+      assert.deepStrictEqual(await visible(), ['srch0003'], 'by body');
+    });
+  });
+
+  describe('several note files', () => {
+    const TEAM = ['.laxative', 'team.json'] as const;
+    const PRIVATE = ['.laxative', 'private.json'] as const;
+    const uriOf = (parts: readonly string[]) => vscode.Uri.joinPath(workspaceRoot(), ...parts);
+
+    /** What the store currently holds, and where each note came from. */
+    async function state(): Promise<{
+      notes: { id: string; store?: string; file: string }[];
+      enabled: string[];
+      target?: string;
+    }> {
+      return (await vscode.commands.executeCommand('laxative._notes')) as any;
+    }
+
+    async function writeNotes(parts: readonly string[], notes: Note[]): Promise<void> {
+      await vscode.workspace.fs.createDirectory(uriOf([parts[0]]));
+      await vscode.workspace.fs.writeFile(uriOf(parts), new TextEncoder().encode(serialize(notes)));
+    }
+
+    async function useFiles(files: unknown[], defaultFile?: string): Promise<void> {
+      const config = vscode.workspace.getConfiguration('laxative');
+      await config.update('noteFiles', files, vscode.ConfigurationTarget.Workspace);
+      await config.update('defaultNoteFile', defaultFile, vscode.ConfigurationTarget.Workspace);
+      await vscode.commands.executeCommand('laxative.refresh');
+    }
+
+    const bothOn = [
+      { name: 'team', path: '.laxative/team.json' },
+      { name: 'private', path: '.laxative/private.json' }
+    ];
+
+    beforeEach(async () => {
+      await writeNotes(TEAM, [
+        makeNote({ id: 'teamaaa1', body: 'Team one' }),
+        makeNote({ id: 'teamaaa2', body: 'Team two', line: 4 })
+      ]);
+      await writeNotes(PRIVATE, [
+        makeNote({ id: 'privbbb1', body: 'Private one', file: 'src/other.ts' })
+      ]);
+    });
+
+    afterEach(async () => {
+      await useFiles([], undefined);
+      await vscode.workspace
+        .getConfiguration('laxative')
+        .update('askWhichNoteFile', undefined, vscode.ConfigurationTarget.Workspace);
+      for (const parts of [TEAM, PRIVATE]) {
+        await vscode.workspace.fs.delete(uriOf(parts), { useTrash: false }).then(
+          () => undefined,
+          () => undefined
+        );
+      }
+      await vscode.commands.executeCommand('laxative.refresh');
+    });
+
+    it('shows the notes from every file that is switched on', async () => {
+      await useFiles(bothOn);
+      const all = await waitFor(
+        async () => ((await state()).notes.length === 3 ? await state() : undefined),
+        'notes from both files'
+      );
+      assert.deepStrictEqual(
+        all.notes.map((n) => `${n.id}:${n.store}`).sort(),
+        ['privbbb1:private', 'teamaaa1:team', 'teamaaa2:team'],
+        'each note knows which file it came from'
+      );
+      assert.deepStrictEqual(all.enabled, ['team', 'private']);
+
+      // Switching one off takes its notes out of everything at once.
+      await useFiles([bothOn[0], { ...bothOn[1], enabled: false }]);
+      const left = await waitFor(
+        async () => ((await state()).notes.length === 2 ? await state() : undefined),
+        'only the team notes'
+      );
+      assert.deepStrictEqual(left.enabled, ['team']);
+      assert.ok(left.notes.every((n) => n.store === 'team'));
+    });
+
+    it('puts a new note in the note file it is told to', async () => {
+      // With several files on, adding a note asks which one it belongs to. The
+      // same choice can be passed straight in, which is what a prompt cannot
+      // be driven to do from here.
+      await useFiles(bothOn, 'private');
+      await waitFor(
+        async () => ((await state()).notes.length === 3 ? true : undefined),
+        'both files loaded'
+      );
+      const document = await vscode.workspace.openTextDocument(appUri());
+      const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
+      editor.selection = new vscode.Selection(3, 0, 3, 0);
+
+      await vscode.commands.executeCommand('laxative.addNote', { target: 'team' });
+      const added = await waitFor(
+        async () => ((await state()).notes.length === 4 ? await state() : undefined),
+        'the new note'
+      );
+      const fresh = added.notes.find((n) => !['teamaaa1', 'teamaaa2', 'privbbb1'].includes(n.id));
+      assert.strictEqual(fresh?.store, 'team', 'it went where it was sent, not to the default');
+
+      await vscode.commands.executeCommand('laxative.addNote', { target: 'nowhere' });
+      assert.strictEqual((await state()).notes.length, 4, 'a file that is not on gets no note');
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    });
+
+    it('writes a new note to the default file and leaves the other alone', async () => {
+      // Not asking is a setting; then the default file takes every new note.
+      await vscode.workspace
+        .getConfiguration('laxative')
+        .update('askWhichNoteFile', false, vscode.ConfigurationTarget.Workspace);
+      await useFiles(bothOn, 'private');
+      await waitFor(
+        async () => ((await state()).target === 'private' ? true : undefined),
+        'private to be the target'
+      );
+      const before = (await vscode.workspace.fs.stat(uriOf(TEAM))).size;
+
+      const document = await vscode.workspace.openTextDocument(appUri());
+      const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
+      editor.selection = new vscode.Selection(2, 0, 2, 0);
+      await vscode.commands.executeCommand('laxative.addNote');
+
+      const added = await waitFor(
+        async () => ((await state()).notes.length === 4 ? await state() : undefined),
+        'the new note'
+      );
+      const fresh = added.notes.find((n) => !['teamaaa1', 'teamaaa2', 'privbbb1'].includes(n.id));
+      assert.strictEqual(fresh?.store, 'private', 'the new note went to the default file');
+      assert.strictEqual(
+        (await vscode.workspace.fs.stat(uriOf(TEAM))).size,
+        before,
+        'the other file was not rewritten'
+      );
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    });
+
+    it('sends a deletion back to the file the note came from', async () => {
+      await useFiles(bothOn);
+      await waitFor(
+        async () => ((await state()).notes.length === 3 ? true : undefined),
+        'both files loaded'
+      );
+      const privateBefore = (await vscode.workspace.fs.stat(uriOf(PRIVATE))).size;
+
+      await vscode.workspace
+        .getConfiguration('laxative')
+        .update('confirmDelete', false, vscode.ConfigurationTarget.Workspace);
+      await vscode.commands.executeCommand('laxative.deleteNote', 'teamaaa1');
+
+      await waitFor(
+        async () => ((await state()).notes.length === 2 ? true : undefined),
+        'the note to go'
+      );
+      const team = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(uriOf(TEAM))));
+      assert.deepStrictEqual(team.notes.map((n: Note) => n.id), ['teamaaa2']);
+      assert.strictEqual(
+        (await vscode.workspace.fs.stat(uriOf(PRIVATE))).size,
+        privateBefore,
+        'the file it was not in is untouched'
+      );
+      await vscode.workspace
+        .getConfiguration('laxative')
+        .update('confirmDelete', undefined, vscode.ConfigurationTarget.Workspace);
+    });
+
+    it('moves a note to another file, keeping its id so references survive', async () => {
+      await useFiles(bothOn);
+      await waitFor(
+        async () => ((await state()).notes.length === 3 ? true : undefined),
+        'both files loaded'
+      );
+
+      await vscode.commands.executeCommand('laxative.moveNoteToFile', {
+        id: 'teamaaa1',
+        target: 'private'
+      });
+      await waitFor(
+        async () =>
+          (await state()).notes.find((n) => n.id === 'teamaaa1')?.store === 'private'
+            ? true
+            : undefined,
+        'the note to move'
+      );
+
+      const read = async (parts: readonly string[]) =>
+        JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(uriOf(parts))))
+          .notes.map((n: Note) => n.id);
+      assert.deepStrictEqual(await read(TEAM), ['teamaaa2']);
+      assert.deepStrictEqual((await read(PRIVATE)).sort(), ['privbbb1', 'teamaaa1']);
+      assert.strictEqual((await state()).notes.length, 3, 'and it is not counted twice');
+    });
+
+    it('never writes the note file a note came from into the file itself', async () => {
+      await useFiles(bothOn);
+      await waitFor(
+        async () => ((await state()).notes.length === 3 ? true : undefined),
+        'both files loaded'
+      );
+      await vscode.commands.executeCommand('laxative.moveNoteToFile', {
+        id: 'teamaaa1',
+        target: 'private'
+      });
+      const written = JSON.parse(
+        new TextDecoder().decode(await vscode.workspace.fs.readFile(uriOf(PRIVATE)))
+      );
+      for (const note of written.notes) {
+        assert.ok(
+          !('store' in note),
+          'which file a note is in is where it lives, not something it carries'
+        );
+      }
+    });
+
+    it('registers the search view and the note file commands', async () => {
+      const commands = await vscode.commands.getCommands(true);
+      for (const id of [
+        'laxative.selectNoteFiles',
+        'laxative.addNoteFile',
+        'laxative.removeNoteFile',
+        'laxative.moveNoteToFile',
+        'laxative.groupByStore'
+      ]) {
+        assert.ok(commands.includes(id), `${id} is registered`);
+      }
+      const views = vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON.contributes.views;
+      const sidebar = views?.laxative as { id: string; type?: string }[];
+      assert.deepStrictEqual(
+        sidebar.map((v) => v.id),
+        ['laxative.notesView'],
+        'one view: the search box is part of the list it searches'
+      );
+      // Not a TreeView: the workbench builds a context menu for every tree row
+      // it draws, out of every extension's entries, and scrolling paid for it.
+      assert.strictEqual(sidebar[0].type, 'webview');
+      const menus = vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON.contributes.menus;
+      assert.strictEqual(menus['view/item/context'], undefined, 'so there are no tree row menus');
+      assert.ok(
+        (menus['webview/context'] as { command: string }[]).some(
+          (entry) => entry.command === 'laxative.deleteNote'
+        ),
+        'and the right-click menu is contributed to the webview instead'
+      );
     });
   });
 

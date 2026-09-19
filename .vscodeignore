@@ -16,3 +16,6 @@ LOCAL.md
 *.local.md
 PUBLISHING.md
 docker/publish.sh
+
+# Notes taken on this repository with the extension itself.
+.laxative/**

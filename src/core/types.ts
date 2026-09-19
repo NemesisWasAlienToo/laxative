@@ -12,6 +12,12 @@ export interface Note {
   /** 0-based column of the anchor within that line. */
   character: number;
   tags: string[];
+  /**
+   * Which note file this note was read from. Assigned when the store loads a
+   * file and never written to disk: the file a note is in is where it is, not
+   * something it carries.
+   */
+  store?: string;
   createdAt: string;
   updatedAt: string;
 }
