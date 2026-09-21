@@ -66,6 +66,32 @@ describe('the notes list', () => {
     );
   });
 
+  it('says which note file a row is in, when that is not already obvious', () => {
+    const rowsOf = (options: Parameters<typeof buildList>[1]) =>
+      buildList(notes, options).groups.flatMap((group) => group.rows.map((row) => row.store));
+
+    assert.deepStrictEqual(
+      rowsOf({ groupBy: 'file', storeOrder: ['team', 'mine'] }),
+      ['team', 'mine', 'team'],
+      'grouped by file, each row carries its note file'
+    );
+    assert.deepStrictEqual(
+      rowsOf({ groupBy: 'tag', storeOrder: ['team', 'mine'] }),
+      ['team', 'mine', 'mine', 'team'],
+      'and grouped by hashtag, where the notes come from everywhere'
+    );
+    assert.deepStrictEqual(
+      rowsOf({ groupBy: 'store', storeOrder: ['team', 'mine'] }),
+      [undefined, undefined, undefined],
+      'grouped by note file, the group says it already'
+    );
+    assert.deepStrictEqual(
+      rowsOf({ groupBy: 'file', storeOrder: ['team'] }),
+      [undefined, undefined, undefined],
+      'with one file on there is nothing to tell apart'
+    );
+  });
+
   it('narrows to a search and a hashtag filter, dropping groups left empty', () => {
     const searched = buildList(notes, { groupBy: 'file', query: { query: 'src -eviction' } });
     assert.deepStrictEqual(searched.visible, ['a1', 'b1']);

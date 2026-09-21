@@ -217,13 +217,10 @@ cat > "$SANDBOX/project/.laxative/ideas.json" <<'SAMPLE'
 }
 SAMPLE
 
+# No note-file settings: the folder is the list, and both files are in it.
 cat > "$SANDBOX/project/.vscode/settings.json" <<'SAMPLE'
 {
-  "laxative.noteFiles": [
-    { "name": "shared", "path": ".laxative/notes.json" },
-    { "name": "ideas", "path": ".laxative/ideas.json" }
-  ],
-  "laxative.defaultNoteFile": "shared"
+  "laxative.defaultNoteFile": "notes"
 }
 SAMPLE
 
@@ -247,10 +244,14 @@ them there.
 4. **Search**: press `Ctrl+Alt+Shift+M` (or click the box at the top of the
    Notes list) and type `retry` - the list narrows as you type. Add ` -worker`
    to exclude, press Down to move into the results, Escape in the box to clear.
-5. **Two note files**: eight notes come from `shared` and `ideas`. Run
+5. **Two note files**: eight notes come from `notes` and `ideas` - the two
+   `.json` files in `.laxative/`, with nothing in settings listing them. Run
    **Laxative: Select Note Files**, untick *ideas*, and watch the two `#idea`
    notes leave the list, the graph and the search at once. Tick it back on.
-   The Notes view can also **Group by Note File**.
+   Then **Laxative: Add Note File...**, type `Design Notes`, and watch
+   `.laxative/design-notes.json` appear in the Explorer and in the list; add a
+   note and it offers the new file. **Rename Note File...** renames the file
+   itself. The Notes view can also **Group by Note File**.
 6. **The Laxative view** in the activity bar - six notes over three files.
    Switch it to **Group by Hashtag**: `#bug` and `#perf/hot-path` have two
    notes each, and `load() is a stub` sits under *untagged*.

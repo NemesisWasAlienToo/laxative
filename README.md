@@ -85,9 +85,9 @@ Extensions view. Your `.laxative/notes.json` stays where it is.
 | **Group by hashtag** | Write `#perf`, `#bug`, `#perf/hot-path` anywhere in a note; typing `#` suggests tags already in use. The Notes view can group by hashtag instead of by file, and filter to one tag. |
 | **Central list** | The **Laxative** activity-bar view lists every note in the workspace, grouped by file, hashtag or note file. What a click does is up to you — see `laxative.listClickAction`. |
 | **Graph** | A **Note Graph** tab in the bottom panel, next to Terminal, the way GitLens puts its commit graph. Obsidian-style force-directed map: arrows are references, faint lines join notes sharing a file or a tag, and node size grows with how connected a note is. Drag to rearrange, **double-click to open**, filter to hide everything else. Move a note by hand and the layout holds every note where you left it rather than pulling it back to the middle, so clusters can be parked apart without drifting; **Tidy** hands it back to the automatic layout. **Select several notes** with Ctrl/Cmd+click, or draw a box around them with a **right-drag** (Shift+drag works too, for trackpads); drag any selected note and the whole selection moves together. Ctrl/Cmd+A selects everything visible, and Escape or a click on empty space clears it. The note you have open — in its editor or the reading panel — is ringed in your theme's focus colour, so you can see where it sits among the others. Graph settings live under **Options ▾**: linking by file, linking by hashtag, **Links pull notes together** (untick it to place linked notes as far apart as you like — the links are still drawn, and Tidy still lays notes out by them), the hover card, and **Go to code when opening a note**, which makes a double-click jump to the note's code as well as opening it (Alt+double-click always goes to the code alone). The layout is computed before the first frame and remembered, so it opens finished rather than sliding into place, and reopening the panel shows it exactly as you left it. Drag a note anywhere and it stays where you drop it, the rest making room in about a fifth of a second. |
-| **Several note files** | Keep notes in as many files as you like, each with a name you choose — one shared with the team, one private, one per area. Switch any combination on at once with **Select Note Files**; the list, the graph, the search and the editor show all of them together, and each note is written back to the file it came from. |
+| **Several note files** | Every `*.json` in `.laxative/` is a note file, named after the file — one per area, per person, per milestone. The folder is the list, so there is nothing to configure. Switch any combination on at once with **Select Note Files**; the list, the graph, the search and the editor show all of them together, and each note is written back to the file it came from. |
 | **Search** | The box at the top of the **Notes** list (`Ctrl+Alt+Shift+M` puts the cursor in it): the list narrows as you type, still grouped however you group it, and says how many of how many matched. Every term has to match; `-term` excludes, so `cache -test -#wip` works, and the chevron opens a separate exclude box. Down or Enter moves into the results, Escape empties the box. Titles, bodies, file paths and hashtags are all searched. |
-| **Git** | Everything is stored in `.laxative/notes.json`, sorted deterministically so diffs stay small and merges stay sane. Commit it to share notes with your team, or run **Configure Storage** to keep it private. |
+| **Git** | Everything is stored in `.laxative/`, sorted deterministically so diffs stay small and merges stay sane. Commit it to share notes with your team, or `.gitignore` a file to keep that one to yourself. |
 | **Import / export** | Export to JSON (round-trips) or Markdown (for reading); import with a merge-or-replace choice. |
 
 ## Keyboard shortcuts
@@ -148,21 +148,34 @@ can never drift out of sync with what you wrote.
 
 ## Where notes are stored
 
-Notes live in JSON files in the workspace, and there can be as many as you like.
-**Laxative: Select Note Files** switches them on and off — one or more at a
-time — and **Laxative: Add Note File...** adds one, with a name of your choosing:
+Notes live in `.laxative/`, and **that folder is the list**: every `*.json` in
+it is a note file, named after the file.
 
-```jsonc
-// .vscode/settings.json
-"laxative.noteFiles": [
-  { "name": "team",    "path": ".laxative/notes.json" },
-  { "name": "private", "path": ".laxative/notes.local.json", "enabled": false },
-  { "name": "review",  "path": ".laxative/review.json" }
-]
+```
+.laxative/
+  notes.json         -> "notes"
+  architecture.json  -> "architecture"
+  review.json        -> "review"
 ```
 
+Nothing lists them anywhere, so a file added by a teammate, by a `git pull` or
+by hand is simply there, and one deleted is simply gone. **Laxative: Add Note
+File...** asks for a name and creates the file; **Rename Note File...** renames
+the file, since the file name is the name; **Delete Note File...** deletes it,
+to the trash. **Laxative: Select Note Files** ticks the ones you want to see:
+
+```jsonc
+// .vscode/settings.json — the only thing settings hold
+"laxative.activeNoteFiles": ["notes", "review"]
+```
+
+Leave it empty and every file in the folder is shown, including ones added
+later. Commit `.laxative/` to share notes with your team; a file you would
+rather keep to yourself is a line in `.gitignore`.
+
 Everything switched on is shown together: the list (which can group **by note
-file**), the graph, the search, the gutter markers and the hover. Each note is
+file**, and otherwise badges each note with the file it is in), the graph, the
+search, the gutter markers and the hover. Each note is
 written back to the file it came from, so switching one off never rewrites
 another, and **Move Note to Another File...** shifts a note between them while
 keeping its id, so `[[references]]` to it still resolve.
@@ -173,11 +186,9 @@ first (the file you used last, or `laxative.defaultNoteFile` if you pin one), so
 Enter accepts it. Turn `laxative.askWhichNoteFile` off to skip the question and
 send every new note to the default. At least one file always stays on.
 
-Leave `laxative.noteFiles` empty and Laxative behaves exactly as it did before,
-with the single file at `laxative.storeFile` (`.laxative/notes.json` by default)
-— existing workspaces need no migration. The setting is `resource`-scoped, so a
-`.vscode/settings.json` can pin it per project. Notes are written atomically
-(write beside, then rename), so a crash or a concurrent reader never sees a
+A workspace with no `.laxative/` yet behaves exactly as a single-file one: the
+first note creates `.laxative/notes.json`. Notes are written atomically (write
+beside, then rename), so a crash or a concurrent reader never sees a
 half-written file.
 
 ## Storage format
@@ -215,7 +226,8 @@ All are under the **Laxative:** prefix in the command palette.
 `Add Note at Cursor` · `Show Notes at Cursor` · `Search Notes` ·
 `Group Notes by Hashtag` / `by File` / `by Note File` · `Filter Notes by Hashtag...` ·
 `Clear Hashtag Filter` · `Show Note Graph` · `Configure Storage...` ·
-`Select Note Files...` · `Add Note File...` · `Remove Note File...` ·
+`Select Note Files...` · `Add Note File...` · `Rename Note File...` ·
+`Delete Note File...` ·
 `Move Note to Another File...` ·
 `Export Notes...` · `Import Notes...` · `Open Notes Store File` ·
 `Show Rendering Diagnostics` · `Refresh Notes`
@@ -224,10 +236,9 @@ All are under the **Laxative:** prefix in the command palette.
 
 | Setting | Default | |
 |---|---|---|
-| `laxative.noteFiles` | `[]` | The note files, each `{ "name", "path", "enabled" }`. Empty means the single `storeFile` below. See above. |
+| `laxative.activeNoteFiles` | `[]` | Which note files in `.laxative/` are shown, by name. Empty means all of them, including any added later. |
 | `laxative.askWhichNoteFile` | `true` | With several note files on, ask which one a new note belongs to. |
 | `laxative.defaultNoteFile` | `""` | The file offered first for a new note, by name. Empty means the one used last. |
-| `laxative.storeFile` | `.laxative/notes.json` | The single file used when `noteFiles` is empty. |
 | `laxative.listClickAction` | `["reveal", "preview"]` | What clicking a note in the Notes view does: any combination of `reveal` (jump to the code), `preview` (open the rendered note) and `edit` (open its markdown). An empty list makes clicking do nothing. |
 | `laxative.showGutterIcon` | `true` | Speech-bubble icon in the gutter. |
 | `laxative.showInlineTitle` | `true` | Dimmed title at the end of the annotated line. |

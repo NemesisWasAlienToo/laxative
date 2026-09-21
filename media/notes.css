@@ -125,6 +125,18 @@ body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 }
 .row .label:last-child, .row .label + .actions { margin-right: auto; }
 
+.store {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  line-height: 16px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  opacity: 0.9;
+}
+
 .actions { flex: 0 0 auto; display: none; margin-left: auto; gap: 2px; }
 .row:hover .actions, #list:focus .row.selected .actions { display: flex; }
 .action {

@@ -2,7 +2,14 @@ import * as vscode from 'vscode';
 import { Note } from './core/types';
 import { deriveTitle, newId, parse, serialize, sortNotes } from './core/schema';
 import { parseTags } from './core/tags';
-import { NoteFileConfig, parseNoteFiles } from './core/noteFiles';
+import {
+  NOTES_DIR,
+  NoteFileConfig,
+  activeNames,
+  discoverFiles,
+  nameFromPath,
+  pathForName
+} from './core/noteFiles';
 
 export type ImportMode = 'merge' | 'replace';
 
@@ -101,10 +108,10 @@ class NoteFile {
 }
 
 /**
- * Owns the notes files. Notes can be split across several of them — shared with
- * the team, private to you, one per area — and any number can be switched on at
- * once; everything else in the extension reads the notes from whichever are on,
- * and reacts to `onDidChange`.
+ * Owns the note files. They are whatever `.laxative/` holds — the folder is
+ * the list, so there is nothing to keep in step with it — and any number of
+ * them can be switched on at once; everything else in the extension reads the
+ * notes from whichever are on, and reacts to `onDidChange`.
  */
 export class NoteStore implements vscode.Disposable {
   /** The enabled files, loaded. `files()` means annotated source files. */
@@ -114,8 +121,12 @@ export class NoteStore implements vscode.Disposable {
   // decoration pass, so these are indexes rather than scans of every note.
   private byId = new Map<string, Note>();
   private bySource = new Map<string, Note[]>();
+  /** Every note file in the folder, switched on or not, as last discovered. */
+  private discovered: NoteFileConfig[] = [];
   /** The note-file settings the current state was loaded from. */
   private loadedFrom = '';
+  /** Watches for note files appearing in or leaving the folder. */
+  private folderWatcher?: vscode.FileSystemWatcher;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.emitter.event;
@@ -124,8 +135,7 @@ export class NoteStore implements vscode.Disposable {
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (
-          (e.affectsConfiguration('laxative.noteFiles') ||
-            e.affectsConfiguration('laxative.storeFile') ||
+          (e.affectsConfiguration('laxative.activeNoteFiles') ||
             e.affectsConfiguration('laxative.defaultNoteFile')) &&
           // Changing them through this class reloads already; the event that
           // follows would only do the same work, and redraw everything, again.
@@ -147,12 +157,26 @@ export class NoteStore implements vscode.Disposable {
     return vscode.workspace.getConfiguration('laxative');
   }
 
-  /** Every configured file, switched on or not, in the order they are listed. */
+  /** Every note file in the folder, switched on or not. */
   noteFiles(): NoteFileConfig[] {
-    const config = this.config();
-    return parseNoteFiles(
-      config.get<unknown>('noteFiles', []),
-      config.get<string>('storeFile', '.laxative/notes.json')
+    return this.discovered;
+  }
+
+  /** What `.laxative/` holds right now, and which of it is switched on. */
+  private async discover(): Promise<NoteFileConfig[]> {
+    const root = this.root;
+    if (!root) {
+      return [];
+    }
+    let entries: [string, vscode.FileType][] = [];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(root, NOTES_DIR));
+    } catch {
+      // No folder yet; the first note makes it.
+    }
+    return discoverFiles(
+      entries.filter(([, type]) => (type & vscode.FileType.File) !== 0).map(([name]) => name),
+      this.config().get<unknown>('activeNoteFiles', [])
     );
   }
 
@@ -192,35 +216,104 @@ export class NoteStore implements vscode.Disposable {
     await this.reload();
   }
 
-  /** Switches note files on or off, and remembers it in workspace settings. */
-  async setEnabled(names: readonly string[]): Promise<void> {
-    const wanted = new Set(names.map((name) => name.toLowerCase()));
-    const files = this.noteFiles().map((file) => ({
-      ...file,
-      enabled: wanted.has(file.name.toLowerCase())
-    }));
-    await this.writeNoteFiles(files);
-  }
-
-  async addNoteFile(file: NoteFileConfig): Promise<void> {
-    await this.writeNoteFiles([...this.noteFiles(), file]);
-  }
-
-  async removeNoteFile(name: string): Promise<void> {
-    await this.writeNoteFiles(this.noteFiles().filter((file) => file.name !== name));
-  }
-
-  private async writeNoteFiles(files: NoteFileConfig[]): Promise<void> {
-    const target = this.root
+  private get target(): vscode.ConfigurationTarget {
+    return this.root
       ? vscode.ConfigurationTarget.Workspace
       : vscode.ConfigurationTarget.Global;
-    await this.config().update('noteFiles', files, target);
+  }
+
+  /**
+   * Switches note files on or off, by name. Switching every one on is written
+   * as nothing at all, so a file added later is on as well rather than hidden
+   * by a list drawn up before it existed.
+   */
+  async setEnabled(names: readonly string[]): Promise<void> {
+    const wanted = new Set(names.map((name) => name.toLowerCase()));
+    const on = this.discovered
+      .filter((file) => wanted.has(file.name.toLowerCase()))
+      .map((file) => file.name);
+    await this.config().update(
+      'activeNoteFiles',
+      on.length === this.discovered.length ? [] : on,
+      this.target
+    );
     await this.reload();
+  }
+
+  /**
+   * Creates an empty note file. The folder is the list, so writing the file is
+   * what adds it; it is switched on, whatever was chosen before.
+   */
+  async addNoteFile(name: string): Promise<NoteFileConfig | undefined> {
+    const root = this.root;
+    if (!root) {
+      return undefined;
+    }
+    const path = pathForName(name, this.discovered.map((file) => file.path));
+    const uri = vscode.Uri.joinPath(root, ...path.split('/'));
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, '..'));
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(serialize([])));
+    const active = activeNames(this.config().get<unknown>('activeNoteFiles', []));
+    if (active.length > 0) {
+      await this.config().update('activeNoteFiles', [...active, nameFromPath(path)], this.target);
+    }
+    await this.reload();
+    return this.discovered.find((file) => file.path === path);
+  }
+
+  /** Deletes a note file, notes and all. To the trash, so it can be got back. */
+  async deleteNoteFile(name: string): Promise<boolean> {
+    const config = this.discovered.find((file) => file.name === name);
+    const root = this.root;
+    if (!config || !root) {
+      return false;
+    }
+    const uri = vscode.Uri.joinPath(root, ...config.path.split('/'));
+    try {
+      await vscode.workspace.fs.delete(uri, { useTrash: true });
+    } catch {
+      await vscode.workspace.fs.delete(uri, { useTrash: false });
+    }
+    await this.forgetName(config.name);
+    await this.reload();
+    return true;
+  }
+
+  /** Renames the file, which is what a note file's name is. */
+  async renameNoteFile(name: string, to: string): Promise<NoteFileConfig | undefined> {
+    const config = this.discovered.find((file) => file.name === name);
+    const root = this.root;
+    if (!config || !root) {
+      return undefined;
+    }
+    const path = pathForName(to, this.discovered.map((file) => file.path));
+    await vscode.workspace.fs.rename(
+      vscode.Uri.joinPath(root, ...config.path.split('/')),
+      vscode.Uri.joinPath(root, ...path.split('/')),
+      { overwrite: false }
+    );
+    await this.forgetName(config.name, nameFromPath(path));
+    await this.reload();
+    return this.discovered.find((file) => file.path === path);
+  }
+
+  /** Settings address a file by name, so a rename or a delete has to reach them. */
+  private async forgetName(from: string, to?: string): Promise<void> {
+    const config = this.config();
+    const active = activeNames(config.get<unknown>('activeNoteFiles', []));
+    const gone = (name: string) => name.toLowerCase() === from.toLowerCase();
+    if (active.some(gone)) {
+      const next = active.filter((name) => !gone(name));
+      await config.update('activeNoteFiles', to ? [...next, to] : next, this.target);
+    }
+    if (gone(config.get<string>('defaultNoteFile', '').trim())) {
+      await config.update('defaultNoteFile', to ?? '', this.target);
+    }
   }
 
   private settingsKey(): string {
     return JSON.stringify([
-      this.noteFiles(),
+      activeNames(this.config().get<unknown>('activeNoteFiles', [])),
       this.config().get<string>('defaultNoteFile', ''),
       this.root?.toString()
     ]);
@@ -229,7 +322,8 @@ export class NoteStore implements vscode.Disposable {
   async reload(): Promise<void> {
     this.loadedFrom = this.settingsKey();
     const root = this.root;
-    const wanted = this.noteFiles().filter((file) => file.enabled);
+    this.discovered = await this.discover();
+    const wanted = this.discovered.filter((file) => file.enabled);
     for (const file of this.loaded) {
       file.dispose();
     }
@@ -245,6 +339,7 @@ export class NoteStore implements vscode.Disposable {
         file.watch(root, () => void this.reloadIfChangedOnDisk(file));
       }
     }
+    this.watchFolder();
     this.remerge();
     this.emitter.fire();
   }
@@ -277,6 +372,28 @@ export class NoteStore implements vscode.Disposable {
       } else {
         this.bySource.set(note.file, [note]);
       }
+    }
+  }
+
+  /** A note file appearing in the folder, or leaving it, changes the list. */
+  private watchFolder(): void {
+    const root = this.root;
+    if (this.folderWatcher || !root) {
+      return;
+    }
+    this.folderWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(root, `${NOTES_DIR}/*.json`)
+    );
+    const look = () => void this.rediscover();
+    this.folderWatcher.onDidCreate(look);
+    this.folderWatcher.onDidDelete(look);
+  }
+
+  /** Our own writes land here too, so nothing is done unless the list differs. */
+  private async rediscover(): Promise<void> {
+    const found = await this.discover();
+    if (JSON.stringify(found) !== JSON.stringify(this.discovered)) {
+      await this.reload();
     }
   }
 
@@ -445,6 +562,7 @@ export class NoteStore implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.folderWatcher?.dispose();
     for (const file of this.loaded) {
       file.dispose();
     }

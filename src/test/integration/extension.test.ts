@@ -589,33 +589,65 @@ describe('Laxative extension', function () {
   });
 
   describe('storage settings', () => {
-    afterEach(async () => {
-      await vscode.workspace
-        .getConfiguration('laxative')
-        .update('storeFile', undefined, vscode.ConfigurationTarget.Workspace);
+    it('takes its note files from the folder, with no list to keep in step', async () => {
+      // Dropped in by hand, by a teammate or by a git pull: it is simply there.
+      const put = vscode.Uri.joinPath(workspaceRoot(), '.laxative', 'from-a-pull.json');
+      await vscode.workspace.fs.writeFile(put, new TextEncoder().encode(serialize([])));
       await vscode.commands.executeCommand('laxative.refresh');
+
+      const files = await waitFor(async () => {
+        const listed = (await vscode.commands.executeCommand('laxative._notes')) as {
+          files: { name: string; path: string }[];
+        };
+        return listed.files.some((file) => file.name === 'from-a-pull') ? listed.files : undefined;
+      }, 'the file that appeared in the folder');
+      assert.deepStrictEqual(
+        files.find((file) => file.name === 'from-a-pull')?.path,
+        '.laxative/from-a-pull.json'
+      );
+      assert.strictEqual(
+        vscode.workspace.getConfiguration('laxative').get('activeNoteFiles')?.toString(),
+        '',
+        'and nothing was written to settings to make that happen'
+      );
+
+      await vscode.workspace.fs.delete(put, { useTrash: false });
+      await vscode.commands.executeCommand('laxative.refresh');
+      const after = (await vscode.commands.executeCommand('laxative._notes')) as {
+        files: { name: string }[];
+      };
+      assert.ok(
+        !after.files.some((file) => file.name === 'from-a-pull'),
+        'and deleting the file is all it takes to be rid of it'
+      );
     });
 
-    it('stores notes wherever laxative.storeFile points', async () => {
-      await vscode.workspace
-        .getConfiguration('laxative')
-        .update('storeFile', 'docs/annotations.json', vscode.ConfigurationTarget.Workspace);
-      await vscode.commands.executeCommand('laxative.refresh');
-
-      const document = await vscode.workspace.openTextDocument(appUri());
-      const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
-      editor.selection = new vscode.Selection(1, 0, 1, 0);
-      await vscode.commands.executeCommand('laxative.addNote');
-
-      const custom = vscode.Uri.joinPath(workspaceRoot(), 'docs', 'annotations.json');
-      const stat = await waitFor(
-        () => vscode.workspace.fs.stat(custom).then((s) => s, () => undefined),
-        'the note file at the configured path'
+    it('clears the old list of note files, now that the folder is the list', async () => {
+      const config = vscode.workspace.getConfiguration('laxative');
+      await config.update(
+        'noteFiles',
+        [{ name: 'whatever', path: '.laxative/notes.json', enabled: true }],
+        vscode.ConfigurationTarget.Workspace
       );
-      assert.ok(stat.size > 0);
-      await vscode.workspace.fs.delete(vscode.Uri.joinPath(workspaceRoot(), 'docs'), {
-        recursive: true
-      });
+      await vscode.commands.executeCommand('laxative._migrate');
+
+      const cleared = await waitFor(
+        () => {
+          const listed = vscode.workspace
+            .getConfiguration('laxative')
+            .get<unknown[]>('noteFiles', []);
+          return listed.length === 0 ? true : undefined;
+        },
+        'the old setting to be cleared'
+      );
+      assert.ok(cleared, 'nothing is left to keep in step with the folder');
+      const still = (await vscode.commands.executeCommand('laxative._notes')) as {
+        files: { name: string }[];
+      };
+      assert.ok(
+        still.files.some((file) => file.name === 'notes'),
+        'and the notes that file held are still there, found by looking'
+      );
     });
 
     it('registers the storage configuration command', async () => {
@@ -770,19 +802,21 @@ describe('Laxative extension', function () {
       await vscode.workspace.fs.writeFile(uriOf(parts), new TextEncoder().encode(serialize(notes)));
     }
 
-    async function useFiles(files: unknown[], defaultFile?: string): Promise<void> {
+    /** Which of the files in the folder are shown; nothing means all of them. */
+    async function useFiles(active?: string[], defaultFile?: string): Promise<void> {
       const config = vscode.workspace.getConfiguration('laxative');
-      await config.update('noteFiles', files, vscode.ConfigurationTarget.Workspace);
+      await config.update('activeNoteFiles', active, vscode.ConfigurationTarget.Workspace);
       await config.update('defaultNoteFile', defaultFile, vscode.ConfigurationTarget.Workspace);
       await vscode.commands.executeCommand('laxative.refresh');
     }
 
-    const bothOn = [
-      { name: 'team', path: '.laxative/team.json' },
-      { name: 'private', path: '.laxative/private.json' }
-    ];
-
     beforeEach(async () => {
+      // The folder is the list, so the file every other test uses would be a
+      // third note file here.
+      await vscode.workspace.fs.delete(storeUri(), { useTrash: false }).then(
+        () => undefined,
+        () => undefined
+      );
       await writeNotes(TEAM, [
         makeNote({ id: 'teamaaa1', body: 'Team one' }),
         makeNote({ id: 'teamaaa2', body: 'Team two', line: 4 })
@@ -793,7 +827,7 @@ describe('Laxative extension', function () {
     });
 
     afterEach(async () => {
-      await useFiles([], undefined);
+      await useFiles(undefined, undefined);
       await vscode.workspace
         .getConfiguration('laxative')
         .update('askWhichNoteFile', undefined, vscode.ConfigurationTarget.Workspace);
@@ -803,11 +837,12 @@ describe('Laxative extension', function () {
           () => undefined
         );
       }
-      await vscode.commands.executeCommand('laxative.refresh');
+      // Put back the file the rest of the tests work with.
+      await writeStore([]);
     });
 
     it('shows the notes from every file that is switched on', async () => {
-      await useFiles(bothOn);
+      await useFiles();
       const all = await waitFor(
         async () => ((await state()).notes.length === 3 ? await state() : undefined),
         'notes from both files'
@@ -817,10 +852,10 @@ describe('Laxative extension', function () {
         ['privbbb1:private', 'teamaaa1:team', 'teamaaa2:team'],
         'each note knows which file it came from'
       );
-      assert.deepStrictEqual(all.enabled, ['team', 'private']);
+      assert.deepStrictEqual(all.enabled, ['private', 'team'], 'in the folder\'s order');
 
       // Switching one off takes its notes out of everything at once.
-      await useFiles([bothOn[0], { ...bothOn[1], enabled: false }]);
+      await useFiles(['team']);
       const left = await waitFor(
         async () => ((await state()).notes.length === 2 ? await state() : undefined),
         'only the team notes'
@@ -833,7 +868,7 @@ describe('Laxative extension', function () {
       // With several files on, adding a note asks which one it belongs to. The
       // same choice can be passed straight in, which is what a prompt cannot
       // be driven to do from here.
-      await useFiles(bothOn, 'private');
+      await useFiles(undefined, 'private');
       await waitFor(
         async () => ((await state()).notes.length === 3 ? true : undefined),
         'both files loaded'
@@ -860,7 +895,7 @@ describe('Laxative extension', function () {
       await vscode.workspace
         .getConfiguration('laxative')
         .update('askWhichNoteFile', false, vscode.ConfigurationTarget.Workspace);
-      await useFiles(bothOn, 'private');
+      await useFiles(undefined, 'private');
       await waitFor(
         async () => ((await state()).target === 'private' ? true : undefined),
         'private to be the target'
@@ -887,7 +922,7 @@ describe('Laxative extension', function () {
     });
 
     it('sends a deletion back to the file the note came from', async () => {
-      await useFiles(bothOn);
+      await useFiles();
       await waitFor(
         async () => ((await state()).notes.length === 3 ? true : undefined),
         'both files loaded'
@@ -916,7 +951,7 @@ describe('Laxative extension', function () {
     });
 
     it('moves a note to another file, keeping its id so references survive', async () => {
-      await useFiles(bothOn);
+      await useFiles();
       await waitFor(
         async () => ((await state()).notes.length === 3 ? true : undefined),
         'both files loaded'
@@ -943,7 +978,7 @@ describe('Laxative extension', function () {
     });
 
     it('never writes the note file a note came from into the file itself', async () => {
-      await useFiles(bothOn);
+      await useFiles();
       await waitFor(
         async () => ((await state()).notes.length === 3 ? true : undefined),
         'both files loaded'
@@ -963,12 +998,94 @@ describe('Laxative extension', function () {
       }
     });
 
+    it('adds note files as files in the folder, named after the name given', async () => {
+      await useFiles();
+      // The name decides the file: it is what a note file is for.
+      await vscode.commands.executeCommand('laxative.addNoteFile', { name: 'Design Notes' });
+      await vscode.commands.executeCommand('laxative.addNoteFile', { name: 'review' });
+
+      const listed = (await state()) as unknown as {
+        files: { name: string; path: string; enabled: boolean }[];
+        enabled: string[];
+      };
+      assert.deepStrictEqual(
+        listed.files.map((file) => file.path),
+        [
+          '.laxative/design-notes.json',
+          '.laxative/private.json',
+          '.laxative/review.json',
+          '.laxative/team.json'
+        ],
+        'a second and a third file, each written where its name says'
+      );
+      assert.deepStrictEqual(listed.enabled, listed.files.map((file) => file.name), 'all on');
+
+      // They are files, not a list in settings: the folder is what it reads.
+      const folder = await vscode.workspace.fs.readDirectory(uriOf(['.laxative']));
+      assert.ok(
+        folder.some(([name]) => name === 'design-notes.json'),
+        `design-notes.json is there: ${folder.map(([name]) => name).join(', ')}`
+      );
+
+      // A name already in use addresses an existing file, so it is refused.
+      await vscode.commands.executeCommand('laxative.addNoteFile', { name: 'review' });
+      assert.strictEqual(
+        ((await state()) as unknown as { files: unknown[] }).files.length,
+        4,
+        'nothing added twice'
+      );
+
+      for (const name of ['design-notes.json', 'review.json']) {
+        await vscode.workspace.fs.delete(uriOf(['.laxative', name]), { useTrash: false });
+      }
+      await vscode.commands.executeCommand('laxative.refresh');
+    });
+
+    it('renames a note file by renaming the file, and deletes it by deleting it', async () => {
+      await useFiles(['team']);
+      await vscode.commands.executeCommand('laxative.addNoteFile', { name: 'scratch' });
+
+      const named = await waitFor(
+        async () => {
+          const listed = (await state()) as unknown as { files: { name: string }[] };
+          return listed.files.some((file) => file.name === 'scratch') ? listed : undefined;
+        },
+        'the new file'
+      );
+      assert.ok(named, 'added');
+
+      // Renaming is the file moving; the chosen files follow it by name.
+      await vscode.commands.executeCommand('laxative.renameNoteFile', {
+        name: 'scratch',
+        to: 'Sketches'
+      });
+      const after = (await state()) as unknown as {
+        files: { name: string; path: string }[];
+        enabled: string[];
+      };
+      assert.ok(
+        after.files.some((file) => file.path === '.laxative/sketches.json'),
+        `renamed on disk: ${after.files.map((file) => file.path).join(', ')}`
+      );
+      assert.ok(!after.files.some((file) => file.name === 'scratch'), 'and the old name is gone');
+      assert.deepStrictEqual(after.enabled.sort(), ['sketches', 'team'], 'still switched on');
+
+      await vscode.commands.executeCommand('laxative.deleteNoteFile', { name: 'sketches' });
+      const gone = (await state()) as unknown as { files: { name: string }[] };
+      assert.deepStrictEqual(
+        gone.files.map((file) => file.name).sort(),
+        ['private', 'team'],
+        'deleting a note file takes the file with it'
+      );
+    });
+
     it('registers the search view and the note file commands', async () => {
       const commands = await vscode.commands.getCommands(true);
       for (const id of [
         'laxative.selectNoteFiles',
         'laxative.addNoteFile',
-        'laxative.removeNoteFile',
+        'laxative.deleteNoteFile',
+        'laxative.renameNoteFile',
         'laxative.moveNoteToFile',
         'laxative.groupByStore'
       ]) {

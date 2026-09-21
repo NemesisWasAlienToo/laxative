@@ -28,39 +28,31 @@
     "configuration": {
       "title": "Laxative",
       "properties": {
-        "laxative.storeFile": {
-          "type": "string",
-          "default": ".laxative/notes.json",
+        "laxative.activeNoteFiles": {
+          "type": "array",
+          "default": [],
           "scope": "resource",
-          "markdownDescription": "Where notes are stored, relative to the workspace root, when `#laxative.noteFiles#` is empty. Commit this file to git to share notes with your team, or point it at an ignored path (for example `.laxative/notes.local.json`) to keep them to yourself."
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Which note files in `.laxative/` are shown, by name (the file name without `.json`). Empty means all of them, including any added later. **Laxative: Select Note Files** writes this."
         },
         "laxative.noteFiles": {
           "type": "array",
           "default": [],
           "scope": "resource",
           "items": {
-            "type": "object",
-            "required": [
-              "path"
-            ],
-            "properties": {
-              "name": {
-                "type": "string",
-                "description": "What you call this file. Defaults to the file name."
-              },
-              "path": {
-                "type": "string",
-                "description": "Path relative to the workspace root."
-              },
-              "enabled": {
-                "type": "boolean",
-                "default": true,
-                "description": "Whether its notes are shown."
-              }
-            },
-            "additionalProperties": false
+            "type": "object"
           },
-          "markdownDescription": "Note files, each with a name of your own. Any number can be switched on at once, and the notes from all of them appear together in the list, the graph, the search and the editor. Leave this empty to use the single `#laxative.storeFile#`.\n\n```json\n[\n  { \"name\": \"team\", \"path\": \".laxative/notes.json\" },\n  { \"name\": \"private\", \"path\": \".laxative/notes.local.json\", \"enabled\": false }\n]\n```\n\nRun **Laxative: Select Note Files** to switch them on and off without editing this."
+          "markdownDeprecationMessage": "No longer used: every `*.json` in `.laxative/` is a note file, and `#laxative.activeNoteFiles#` says which are shown. A file listed here that lives elsewhere is offered a move into the folder.",
+          "description": "Replaced by the .laxative/ folder itself."
+        },
+        "laxative.storeFile": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDeprecationMessage": "No longer used: notes live in `.laxative/`, one file per name. A file here that lives elsewhere is offered a move into the folder.",
+          "description": "Replaced by the .laxative/ folder itself."
         },
         "laxative.defaultNoteFile": {
           "type": "string",
@@ -282,9 +274,10 @@
         "category": "Laxative"
       },
       {
-        "command": "laxative.removeNoteFile",
-        "title": "Remove Note File...",
-        "category": "Laxative"
+        "command": "laxative.deleteNoteFile",
+        "title": "Delete Note File...",
+        "category": "Laxative",
+        "icon": "$(trash)"
       },
       {
         "command": "laxative.moveNoteToFile",
@@ -308,6 +301,12 @@
         "title": "Collapse All",
         "category": "Laxative",
         "icon": "$(collapse-all)"
+      },
+      {
+        "command": "laxative.renameNoteFile",
+        "title": "Rename Note File...",
+        "category": "Laxative",
+        "icon": "$(edit)"
       }
     ],
     "menus": {
@@ -436,7 +435,7 @@
           "group": "1_store@4"
         },
         {
-          "command": "laxative.removeNoteFile",
+          "command": "laxative.deleteNoteFile",
           "when": "view == laxative.notesView",
           "group": "1_store@5"
         },
@@ -454,6 +453,11 @@
           "command": "laxative.collapseAll",
           "when": "view == laxative.notesView",
           "group": "navigation@9"
+        },
+        {
+          "command": "laxative.renameNoteFile",
+          "when": "view == laxative.notesView",
+          "group": "1_store@6"
         }
       ],
       "webview/context": [
