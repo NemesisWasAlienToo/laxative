@@ -2,14 +2,29 @@
 
 ## 0.7.0
 
-- **Notes can be split across several files**, each with a name you choose, and
-  any combination of them can be switched on at once. `laxative.noteFiles` lists
-  them; **Laxative: Select Note Files** switches them on and off, **Add Note
-  File...** adds one, and **Remove Note File...** takes one off the list without
-  touching the file on disk. Everything switched on is shown together — the
-  list, the graph, the search, the gutter markers and the hover — and each note
-  is written back to the file it came from, so switching one file off never
-  rewrites another.
+- **Note files are the files in `.laxative/`.** Every `*.json` in that folder is
+  a note file, named after the file, and nothing lists them anywhere: a file
+  added by a teammate, a `git pull` or by hand is simply there, and one deleted
+  is simply gone. Settings hold one thing, `laxative.activeNoteFiles`, which
+  names the files you are looking at; empty means all of them, including any
+  added later.
+  - **Add Note File...** asks for a name and creates the file — the name is the
+    file name, so `Design Notes` is `.laxative/design-notes.json`, shown as you
+    type. **Rename Note File...** renames the file. **Delete Note File...**
+    deletes it, to the trash.
+  - `laxative.noteFiles` and `laxative.storeFile` are gone. They are cleared
+    for you, and a file either of them pointed at outside `.laxative/` is
+    offered a move into the folder first, so nothing stops appearing quietly.
+  - With more than one file switched on, **every note in the list says which
+    file it is in**, in a small badge at the end of its row — except when the
+    list is grouped by note file, where the group already says it.
+  - Nothing is offered up for `.gitignore` any more: notes are usually
+    committed with the code, and a file you want to yourself is a line you
+    write.
+- **Notes can be split across several files**, any combination of them shown at
+  once. Everything switched on is shown together — the list, the graph, the
+  search, the gutter markers and the hover — and each note is written back to
+  the file it came from, so switching one file off never rewrites another.
   - The Notes view can group **by note file**, alongside by file and by hashtag.
   - **Move Note to Another File...** moves a note between files, keeping its id
     so `[[references]]` to it still resolve.
@@ -17,8 +32,6 @@
     with the file you used last listed first so Enter accepts it.
     `laxative.askWhichNoteFile` turns the question off, and
     `laxative.defaultNoteFile` pins the answer.
-  - Leaving `laxative.noteFiles` empty keeps the previous single-file behaviour
-    with `laxative.storeFile`, so existing workspaces need no migration.
 - **Scrolling the Notes list no longer pins a CPU core.** The list was a
   VS Code TreeView, and for every tree row it draws the workbench builds that
   row's right-click menu from the `view/item/context` entries of *every*

@@ -248,6 +248,15 @@ describe('notes list webview', () => {
     assert.strictEqual(noteRows()[0].title, 'First tooltip', 'the hover says where it points');
   });
 
+  it('shows which note file a row is in, when it is told one', () => {
+    const groups = plain(byFile().groups);
+    groups[0].rows[0].store = 'review';
+    open(byFile({ groups }));
+    const [first, second] = noteRows();
+    assert.strictEqual(first.querySelector('.store')?.textContent, 'review');
+    assert.strictEqual(second.querySelector('.store'), null, 'and nothing when it is not');
+  });
+
   it('opens a note when its row is clicked', () => {
     open();
     click(noteRows()[1].querySelector('.label'));

@@ -7,8 +7,10 @@ import { NoteDocuments } from './noteDocuments';
 import {
   addNoteFile,
   configureStorage,
+  deleteNoteFile,
+  migrateLegacyFiles,
   pickNoteFile,
-  removeNoteFile,
+  renameNoteFile,
   selectNoteFiles
 } from './storageSettings';
 import { GraphView } from './graphView';
@@ -341,15 +343,26 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  command('laxative.addNoteFile', async () => {
-    if (requireStore()) {
-      await addNoteFile(store);
+  command('laxative.addNoteFile', async (arg: unknown) => {
+    if (!requireStore()) {
+      return;
+    }
+    const added = await addNoteFile(store, arg as { name?: unknown; path?: unknown } | undefined);
+    if (added) {
+      // A file you have just made is where your next note most likely belongs.
+      await context.workspaceState.update('laxative.lastNoteFile', added);
     }
   });
 
-  command('laxative.removeNoteFile', async () => {
+  command('laxative.renameNoteFile', async (arg: unknown) => {
     if (requireStore()) {
-      await removeNoteFile(store);
+      await renameNoteFile(store, arg as { name?: unknown; to?: unknown } | undefined);
+    }
+  });
+
+  command('laxative.deleteNoteFile', async (arg: unknown) => {
+    if (requireStore()) {
+      await deleteNoteFile(store, arg as { name?: unknown } | undefined);
     }
   });
 
@@ -387,6 +400,9 @@ export function activate(context: vscode.ExtensionContext): void {
   command('laxative.showDiagnostics', () => showDiagnostics(diagnostics));
 
   command('laxative._diagnostics', () => diagnostics.snapshot());
+
+  // Runs the one-time clean-up of the old settings, for the integration tests.
+  command('laxative._migrate', () => migrateLegacyFiles(store));
 
   // A window onto what the store currently holds, for the integration tests:
   // which notes are visible, and which file each of them came from.
@@ -478,7 +494,11 @@ export function activate(context: vscode.ExtensionContext): void {
     annotations.refreshAll();
   });
 
-  void store.initialize().then(() => annotations.refreshAll());
+  void store
+    .initialize()
+    .then(() => annotations.refreshAll())
+    // Note files used to be listed in settings; the folder is the list now.
+    .then(() => migrateLegacyFiles(store));
 }
 
 export function deactivate(): void {

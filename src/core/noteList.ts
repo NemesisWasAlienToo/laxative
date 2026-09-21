@@ -26,6 +26,8 @@ export interface ListRow {
   noteId: string;
   title: string;
   description?: string;
+  /** Which note file it is in, when that is not already obvious. */
+  store?: string;
   /** Where the note points and how it starts, for the row's hover. */
   tooltip: string;
 }
@@ -98,12 +100,16 @@ export function buildList(notes: readonly ListNote[], options: ListOptions): Not
     visible.push(note);
   }
 
+  // Which note file a note is in is worth a word on the row only when more
+  // than one is switched on, and not when the group already says it.
+  const showStoreOnRow = showStore && options.groupBy !== 'store';
   const rowsOf = (group: string, members: readonly ListNote[], showFile: boolean): ListRow[] =>
     members.map((note) => ({
       id: `note:${group}:${note.id}`,
       noteId: note.id,
       title: note.title,
       description: noteDescription(note, showFile),
+      store: showStoreOnRow ? note.store : undefined,
       tooltip: tooltipOf(note, showStore)
     }));
 

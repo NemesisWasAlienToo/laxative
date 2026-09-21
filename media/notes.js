@@ -136,6 +136,10 @@
     if (row.description) {
       el.appendChild(text('description', row.description));
     }
+    if (row.store) {
+      // Which note file it is in, when more than one is switched on.
+      el.appendChild(text('store', row.store));
+    }
     const actions = document.createElement('span');
     actions.className = 'actions';
     actions.appendChild(action('reveal', 'Go to Code', 'laxative.revealNote'));
