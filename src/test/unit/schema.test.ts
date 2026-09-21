@@ -1,5 +1,12 @@
 import * as assert from 'assert';
-import { deriveTitle, newId, parse, serialize, sortNotes } from '../../core/schema';
+import {
+  deriveTitle,
+  newId,
+  parse,
+  serialize,
+  serializeExport,
+  sortNotes
+} from '../../core/schema';
 import { Note } from '../../core/types';
 
 function note(overrides: Partial<Note> = {}): Note {
@@ -18,6 +25,35 @@ function note(overrides: Partial<Note> = {}): Note {
 }
 
 describe('schema', () => {
+  it('keeps the note file in an export, and nowhere else', () => {
+    const notes = [
+      note({ id: 'aaaa1111', store: 'team' }),
+      note({ id: 'bbbb2222', file: 'src/b.ts', store: 'ideas' })
+    ];
+    // A store file never says which file it is: it is that file.
+    assert.ok(!serialize(notes).includes('team'), 'not in the notes file itself');
+
+    const exported = serializeExport(notes);
+    const doc = JSON.parse(exported);
+    assert.deepStrictEqual(
+      doc.notes.map((n: { id: string; store?: string }) => `${n.id}:${n.store}`),
+      ['aaaa1111:team', 'bbbb2222:ideas'],
+      'an export stands in for several files, so it has to say which'
+    );
+    assert.ok(doc.exportedAt, 'and when it was made');
+
+    // Which is what lets an import put them back rather than pour them in.
+    assert.deepStrictEqual(
+      parse(exported).map((n) => `${n.id}:${n.store}`),
+      ['aaaa1111:team', 'bbbb2222:ideas']
+    );
+    assert.strictEqual(
+      parse(serialize(notes))[0].store,
+      undefined,
+      'a note read from a store file carries nothing of the sort'
+    );
+  });
+
   it('derives a title from the first meaningful markdown line', () => {
     assert.strictEqual(deriveTitle('## Heading\n\nbody'), 'Heading');
     assert.strictEqual(deriveTitle('\n\n- bullet item\nmore'), 'bullet item');

@@ -116,6 +116,8 @@ body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 
 .label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .description {
+  /* The one flexible thing on a row: it takes all the slack, so everything
+     after it is pinned to the right edge whether or not it has any text. */
   flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
@@ -123,11 +125,9 @@ body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
   font-size: 0.9em;
   opacity: 0.7;
 }
-.row .label:last-child, .row .label + .actions { margin-right: auto; }
 
 .store {
   flex: 0 0 auto;
-  margin-left: auto;
   padding: 0 6px;
   border-radius: 999px;
   font-size: 0.85em;
@@ -137,7 +137,7 @@ body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
   opacity: 0.9;
 }
 
-.actions { flex: 0 0 auto; display: none; margin-left: auto; gap: 2px; }
+.actions { flex: 0 0 auto; display: none; gap: 2px; }
 .row:hover .actions, #list:focus .row.selected .actions { display: flex; }
 .action {
   display: flex;
@@ -151,12 +151,14 @@ body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 }
 .action:hover { background: var(--vscode-toolbar-hoverBackground); }
 
-#empty { padding: 8px 20px; }
-#empty p { margin: 0 0 10px; line-height: 1.4; }
+#empty { padding: 10px 20px; }
+#empty p { margin: 0 0 12px; line-height: 1.4; }
 .welcome {
   display: block;
+  /* Flush with the text above it, both edges: without border-box the padding
+     and border are added to the width, so the button ran past its own box. */
+  box-sizing: border-box;
   width: 100%;
-  max-width: 300px;
   margin: 0 0 8px;
   padding: 5px 10px;
   color: var(--vscode-button-foreground);

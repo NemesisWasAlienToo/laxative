@@ -2,7 +2,7 @@
   "name": "laxative",
   "displayName": "Laxative",
   "description": "Attach markdown notes to places in your code without editing the code. Notes live in a git-friendly file, cross-reference each other, group by hashtag, and can be browsed as a list or a graph.",
-  "version": "0.1.0",
+  "version": "0.7.4",
   "publisher": "local",
   "license": "MIT",
   "engines": {

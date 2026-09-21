@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.7.4
+
+- In a remote window — SSH, WSL, a container — the file icon theme is installed
+  on the local side, where the extension host cannot reach it. The Explorer
+  still shows it because the workbench draws that itself; a webview is never
+  given the theme. The Notes list leaves its rows plain rather than standing in
+  with some other theme's icons, and **Show Rendering Diagnostics** says which
+  theme was asked for, which ones this window can see, and what stopped it.
+- **Show Rendering Diagnostics** also names the version of the extension that
+  is running and whether the window is remote, which is the quickest answer to
+  "did my update actually apply?"
+
+## 0.7.2
+
+- The buttons on the empty Notes view line up with the text above them. They
+  were sized without `box-sizing`, so their padding and border were added on
+  top of the width they were given and neither edge landed where it should.
+
+## 0.7.1
+
+- **Exporting keeps the note files.** An export now records which note file
+  each note came from, and importing one offers to put them back there,
+  creating any file the workspace does not have yet — before, several files
+  went out as one list and came back as one file. The notes stay a flat list
+  in the JSON, so nothing that reads an older export breaks. A markdown export
+  names the file each note is in when there is more than one.
+- The Go to Code and Edit buttons on a note now sit at the right of the row,
+  beside the note-file badge. Three different things were laying claim to the
+  space left over on a row, so the buttons came to rest wherever that left
+  them — halfway along, on a row with nothing else on it.
+- When the file icon theme cannot be reached, the Notes list falls back to
+  VS Code's own Seti icons rather than plain pages, and **Show Rendering
+  Diagnostics** says which theme was asked for, where it came from and what
+  stopped it. This is what happens in a WSL or SSH window, where the icon theme
+  is installed on the local side and the extension host cannot see it.
+
 ## 0.7.0
 
 - **Note files are the files in `.laxative/`.** Every `*.json` in that folder is
