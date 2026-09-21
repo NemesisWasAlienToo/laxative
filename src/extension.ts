@@ -397,9 +397,21 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.setStatusBarMessage(`Laxative: note moved to ${target}.`, 4000);
   });
 
-  command('laxative.showDiagnostics', () => showDiagnostics(diagnostics));
+  command('laxative.showDiagnostics', () => {
+    diagnostics.record('laxative', {
+      version: String(context.extension.packageJSON?.version ?? 'unknown'),
+      window: vscode.env.remoteName ? `remote (${vscode.env.remoteName})` : 'local'
+    });
+    diagnostics.record('file icons', tree.iconReport() as unknown as Record<string, unknown>);
+    return showDiagnostics(diagnostics);
+  });
 
-  command('laxative._diagnostics', () => diagnostics.snapshot());
+  command('laxative._diagnostics', () => ({
+    ...diagnostics.snapshot(),
+    version: String(context.extension.packageJSON?.version ?? 'unknown'),
+    remote: vscode.env.remoteName ?? null,
+    icons: tree.iconReport()
+  }));
 
   // Runs the one-time clean-up of the old settings, for the integration tests.
   command('laxative._migrate', () => migrateLegacyFiles(store));
@@ -422,15 +434,15 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  command('laxative.export', async () => {
+  command('laxative.export', async (arg: unknown) => {
     if (requireStore()) {
-      await exportNotes(store);
+      await exportNotes(store, arg as { uri?: unknown; format?: unknown } | undefined);
     }
   });
 
-  command('laxative.import', async () => {
+  command('laxative.import', async (arg: unknown) => {
     if (requireStore()) {
-      await importNotes(store);
+      await importNotes(store, arg as { uri?: unknown; mode?: unknown; split?: unknown } | undefined);
       annotations.refreshAll();
     }
   });

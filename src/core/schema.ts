@@ -59,6 +59,27 @@ function onDisk(note: Note): Note {
   };
 }
 
+/**
+ * An export carries which note file each note came from, which a store file
+ * never does: there, the file a note is written in *is* the answer, but an
+ * export is one document standing in for several, and without it an import
+ * has no way to put them back where they were.
+ *
+ * The notes stay a flat list under `notes`, so a reader that knows nothing of
+ * note files still reads every note in the export.
+ */
+export function serializeExport(notes: readonly Note[]): string {
+  const doc = {
+    version: STORE_VERSION,
+    exportedAt: new Date().toISOString(),
+    notes: sortNotes([...notes]).map((note) => ({
+      ...onDisk(note),
+      ...(note.store ? { store: note.store } : {})
+    }))
+  };
+  return JSON.stringify(doc, null, 2) + '\n';
+}
+
 export function serialize(notes: Note[]): string {
   const doc: NoteStoreFile = { version: STORE_VERSION, notes: sortNotes(notes).map(onDisk) };
   return JSON.stringify(doc, null, 2) + '\n';
@@ -112,7 +133,10 @@ export function parse(text: string): Note[] {
       character: asPosition(entry.character),
       tags: parseTags(body),
       createdAt: asString(entry.createdAt, now),
-      updatedAt: asString(entry.updatedAt, now)
+      updatedAt: asString(entry.updatedAt, now),
+      // Only an export carries this; it is what puts the notes back in the
+      // files they came from.
+      ...(asString(entry.store) ? { store: asString(entry.store) } : {})
     });
   }
   return sortNotes(notes);

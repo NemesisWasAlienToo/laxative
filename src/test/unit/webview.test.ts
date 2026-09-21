@@ -255,6 +255,36 @@ describe('notes list webview', () => {
     const [first, second] = noteRows();
     assert.strictEqual(first.querySelector('.store')?.textContent, 'review');
     assert.strictEqual(second.querySelector('.store'), null, 'and nothing when it is not');
+    // Last on the row, so the buttons that appear on hover open up beside the
+    // badge instead of pushing it along.
+    assert.ok(first.lastElementChild.classList.contains('store'), 'the badge ends the row');
+    assert.ok(
+      first.querySelector('.actions').nextElementSibling.classList.contains('store'),
+      'with the buttons immediately before it'
+    );
+  });
+
+  it('gives every row one thing that stretches, so the right of it stays put', () => {
+    // Anything else and the slack is shared out between them, which left the
+    // buttons stranded in the middle of the row.
+    const groups = plain(byFile().groups);
+    groups[0].rows[0].store = 'review';
+    groups[0].rows[0].description = 'src/a.ts:2';
+    open(byFile({ groups }));
+    for (const row of noteRows()) {
+      const stretchy = [...row.children].filter((el: any) =>
+        el.classList.contains('description')
+      );
+      assert.strictEqual(
+        stretchy.length,
+        1,
+        `one stretching element on ${row.textContent}, described or not`
+      );
+      assert.ok(
+        row.querySelector('.description').nextElementSibling.classList.contains('actions'),
+        'and everything pinned right comes after it'
+      );
+    }
   });
 
   it('opens a note when its row is clicked', () => {

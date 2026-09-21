@@ -133,18 +133,20 @@
     });
     el.appendChild(icon('note'));
     el.appendChild(text('label', row.title));
-    if (row.description) {
-      el.appendChild(text('description', row.description));
-    }
-    if (row.store) {
-      // Which note file it is in, when more than one is switched on.
-      el.appendChild(text('store', row.store));
-    }
+    // Always there, even empty: it is what takes up the slack on the row, so
+    // the buttons and the badge stay at the right edge.
+    el.appendChild(text('description', row.description || ''));
     const actions = document.createElement('span');
     actions.className = 'actions';
     actions.appendChild(action('reveal', 'Go to Code', 'laxative.revealNote'));
     actions.appendChild(action('edit', 'Edit Note', 'laxative.editNote'));
     el.appendChild(actions);
+    if (row.store) {
+      // Which note file it is in, when more than one is switched on. Last, so
+      // that the buttons appearing on hover open up beside it rather than
+      // shunting it along the row.
+      el.appendChild(text('store', row.store));
+    }
     return el;
   }
 

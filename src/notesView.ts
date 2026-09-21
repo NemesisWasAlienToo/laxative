@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { NoteStore } from './store';
 import { Query, isActive } from './core/search';
 import { GroupBy, NoteList, buildList, describeList, flatten } from './core/noteList';
-import { FileIcons } from './fileIcons';
+import { FileIcons, IconReport } from './fileIcons';
 
 export type { GroupBy };
 
@@ -47,7 +47,7 @@ export class NotesView implements vscode.WebviewViewProvider, vscode.Disposable 
   private list?: NoteList;
   /** Asked for before the webview existed; it is built lazily. */
   private pending: { focusSearch?: boolean; reveal?: string } = {};
-  private readonly icons = new FileIcons();
+  private readonly icons: FileIcons;
   /** The folders the webview was last allowed to read, to tell when that changes. */
   private allowed = '';
   private readonly disposables: vscode.Disposable[] = [];
@@ -58,6 +58,7 @@ export class NotesView implements vscode.WebviewViewProvider, vscode.Disposable 
     private readonly memento: vscode.Memento
   ) {
     this.groupBy = memento.get<GroupBy>('laxative.groupBy', 'file');
+    this.icons = new FileIcons();
     this.disposables.push(
       vscode.window.registerWebviewViewProvider(NotesView.viewType, this, {
         webviewOptions: { retainContextWhenHidden: true }
@@ -214,6 +215,11 @@ export class NotesView implements vscode.WebviewViewProvider, vscode.Disposable 
       total: list.total,
       hasFolder: this.store.root !== undefined
     });
+  }
+
+  /** What the file icon theme did, for Show Rendering Diagnostics. */
+  iconReport(): IconReport {
+    return this.icons.describe();
   }
 
   /** The notes the list is showing, after the search and any tag filter. */

@@ -21,6 +21,22 @@ export interface ListFont {
   style?: string;
 }
 
+/** Why the list is drawing plain page icons, when it is. */
+export interface IconReport {
+  /** `workbench.iconTheme`, or null for "None". */
+  wanted: string | null;
+  found: boolean;
+  /** The extension the theme came from, when one was found. */
+  from?: string;
+  definitions?: number;
+  fonts?: number;
+  /** What stopped it, when something did. */
+  problem?: string;
+  /** Every icon theme this extension host can see, which in a remote window
+   *  is not the same set the workbench is drawing the Explorer with. */
+  available?: string[];
+}
+
 interface Loaded {
   document: IconThemeDocument;
   /** The folder the theme file is in: its paths are relative to it. */
@@ -36,6 +52,7 @@ interface Loaded {
  */
 export class FileIcons implements vscode.Disposable {
   private loaded?: Loaded;
+  private report: IconReport = { wanted: null, found: false };
   private languages: LanguageIndex = indexLanguages([]);
   private readonly emitter = new vscode.EventEmitter<void>();
   /** The theme, or what it says about a file, may have changed. */
@@ -55,6 +72,11 @@ export class FileIcons implements vscode.Disposable {
     );
   }
 
+  /** What the icon theme did, for Show Rendering Diagnostics. */
+  describe(): IconReport {
+    return this.report;
+  }
+
   async load(): Promise<void> {
     this.loaded = await this.read();
     this.languages = indexLanguages(
@@ -67,10 +89,32 @@ export class FileIcons implements vscode.Disposable {
   }
 
   private async read(): Promise<Loaded | undefined> {
-    const wanted = vscode.workspace.getConfiguration('workbench').get<string | null>('iconTheme');
-    if (!wanted) {
-      return undefined;
+    const wanted = vscode.workspace.getConfiguration('workbench').get<string | null>('iconTheme') ?? null;
+    // Built up here and published in one go at the end: a report read while it
+    // was still being filled in would say the theme had failed when it had
+    // only not been tried yet.
+    const report: IconReport = { wanted, found: false };
+    try {
+      if (!wanted) {
+        // Asked for no icons; drawing some anyway would be worse than none.
+        report.problem = 'No file icon theme is chosen (workbench.iconTheme is None).';
+        return undefined;
+      }
+      report.available = vscode.extensions.all.flatMap((extension) =>
+        ((extension.packageJSON?.contributes?.iconThemes as { id?: string }[] | undefined) ?? [])
+          .map((theme) => theme.id)
+          .filter((id): id is string => typeof id === 'string')
+      );
+      // Your theme or nothing: a different theme's icons would not be the
+      // ones the Explorer is showing, and standing in for them is worse than
+      // leaving the rows plain and saying why.
+      return await this.readTheme(wanted, report);
+    } finally {
+      this.report = report;
     }
+  }
+
+  private async readTheme(wanted: string, report: IconReport): Promise<Loaded | undefined> {
     for (const extension of vscode.extensions.all) {
       const themes = extension.packageJSON?.contributes?.iconThemes as
         | { id?: string; path?: string }[]
@@ -82,15 +126,32 @@ export class FileIcons implements vscode.Disposable {
       try {
         const file = vscode.Uri.joinPath(extension.extensionUri, theme.path);
         const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+        const document = parseTheme(text);
+        report.found = true;
+        report.from = `${extension.id} (${extension.extensionUri.scheme})`;
+        report.definitions = Object.keys(document.iconDefinitions ?? {}).length;
+        report.fonts = (document.fonts ?? []).length;
         return {
-          document: parseTheme(text),
+          document,
           base: vscode.Uri.joinPath(file, '..'),
           root: extension.extensionUri
         };
-      } catch {
-        return undefined; // A theme that cannot be read is a list with plain icons.
+      } catch (err) {
+        // A theme that cannot be read is a list with plain icons, but silence
+        // here is exactly what makes "my icons are gone" unanswerable. The
+        // first thing to go wrong is the interesting one: it is about the
+        // theme actually asked for.
+        report.problem = `${theme.path} could not be read: ${String(err)}`;
+        return undefined;
       }
     }
+    // Themes are UI extensions: over a remote connection they are installed on
+    // the local side, where this extension host cannot see them at all.
+    report.problem =
+      `No installed extension contributes the icon theme "${wanted}". ` +
+      (vscode.env.remoteName
+        ? `This window is connected to ${vscode.env.remoteName}, and an icon theme installed locally is not visible to a remote extension host.`
+        : 'It may be disabled in this workspace.');
     return undefined;
   }
 

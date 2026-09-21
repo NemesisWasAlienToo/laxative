@@ -650,6 +650,54 @@ describe('Laxative extension', function () {
       );
     });
 
+    it('says why the rows are plain when the icon theme cannot be reached', async () => {
+      // What a WSL or SSH window looks like from in here: the icon theme is
+      // installed on the local side, and this extension host cannot see it.
+      // No icons are drawn in its place; the report is how you find out why.
+      const workbench = vscode.workspace.getConfiguration('workbench');
+      const before = workbench.get<string | null>('iconTheme');
+      await workbench.update(
+        'iconTheme',
+        'theme-from-another-machine',
+        vscode.ConfigurationTarget.Workspace
+      );
+      try {
+        const report = await waitFor(async () => {
+          const icons = (
+            (await vscode.commands.executeCommand('laxative._diagnostics')) as {
+              icons: {
+                wanted: string | null;
+                found: boolean;
+                problem?: string;
+                available?: string[];
+              };
+            }
+          ).icons;
+          // Settled, not merely started: the report is published in one go.
+          return icons.wanted === 'theme-from-another-machine' && icons.available
+            ? icons
+            : undefined;
+        }, 'the icon theme report');
+
+        assert.strictEqual(report.found, false, 'no other theme stands in for it');
+        assert.match(
+          report.problem ?? '',
+          /No installed extension contributes/,
+          'and it says why the one asked for was not used'
+        );
+        assert.ok(
+          Array.isArray(report.available),
+          `with the themes this host can see: ${JSON.stringify(report.available)}`
+        );
+      } finally {
+        await workbench.update(
+          'iconTheme',
+          before ?? undefined,
+          vscode.ConfigurationTarget.Workspace
+        );
+      }
+    });
+
     it('registers the storage configuration command', async () => {
       const commands = await vscode.commands.getCommands(true);
       assert.ok(commands.includes('laxative.configureStorage'));
@@ -1077,6 +1125,86 @@ describe('Laxative extension', function () {
         ['private', 'team'],
         'deleting a note file takes the file with it'
       );
+    });
+
+    it('exports the note files as they are, and imports them back the same way', async () => {
+      await useFiles();
+      const exported = vscode.Uri.joinPath(workspaceRoot(), 'export.json');
+      await vscode.commands.executeCommand('laxative.export', {
+        uri: exported,
+        format: 'json'
+      });
+
+      const doc = JSON.parse(
+        new TextDecoder().decode(await vscode.workspace.fs.readFile(exported))
+      ) as { notes: { id: string; store?: string }[] };
+      assert.deepStrictEqual(
+        doc.notes.map((note) => `${note.id}:${note.store}`).sort(),
+        ['privbbb1:private', 'teamaaa1:team', 'teamaaa2:team'],
+        'the export says which note file each note came from'
+      );
+
+      // Both files emptied: the import has to put each note back on its own.
+      await writeNotes(TEAM, []);
+      await writeNotes(PRIVATE, []);
+      await vscode.commands.executeCommand('laxative.refresh');
+      await waitFor(
+        async () => ((await state()).notes.length === 0 ? true : undefined),
+        'the notes to be cleared'
+      );
+
+      await vscode.commands.executeCommand('laxative.import', {
+        uri: exported,
+        mode: 'merge',
+        split: true
+      });
+      const back = await waitFor(
+        async () => ((await state()).notes.length === 3 ? await state() : undefined),
+        'the notes to come back'
+      );
+      assert.deepStrictEqual(
+        back.notes.map((note) => `${note.id}:${note.store}`).sort(),
+        ['privbbb1:private', 'teamaaa1:team', 'teamaaa2:team'],
+        'each one back in the file it was exported from'
+      );
+
+      await vscode.workspace.fs.delete(exported, { useTrash: false });
+    });
+
+    it('makes a note file the import needs but the workspace does not have', async () => {
+      await useFiles();
+      const exported = vscode.Uri.joinPath(workspaceRoot(), 'from-elsewhere.json');
+      await vscode.workspace.fs.writeFile(
+        exported,
+        new TextEncoder().encode(
+          serialize([makeNote({ id: 'elsew001', body: 'From another workspace' })]).replace(
+            '"tags"',
+            '"store": "handover", "tags"'
+          )
+        )
+      );
+
+      await vscode.commands.executeCommand('laxative.import', {
+        uri: exported,
+        mode: 'merge',
+        split: true
+      });
+      const listed = await waitFor(async () => {
+        const now = (await state()) as unknown as {
+          files: { name: string }[];
+          notes: { id: string; store?: string }[];
+        };
+        return now.files.some((file) => file.name === 'handover') ? now : undefined;
+      }, 'the note file the import asked for');
+      assert.strictEqual(
+        listed.notes.find((note) => note.id === 'elsew001')?.store,
+        'handover',
+        'the note lands in the file it names'
+      );
+
+      await vscode.workspace.fs.delete(exported, { useTrash: false });
+      await vscode.workspace.fs.delete(uriOf(['.laxative', 'handover.json']), { useTrash: false });
+      await vscode.commands.executeCommand('laxative.refresh');
     });
 
     it('registers the search view and the note file commands', async () => {
