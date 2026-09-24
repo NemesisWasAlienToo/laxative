@@ -3,6 +3,13 @@ import { NoteStore } from './store';
 import { Note } from './core/types';
 import { hoverMarkdown } from './markdown';
 
+/** The lines a document's marks were last drawn on, and how many times. */
+export interface Marks {
+  gutter: number[];
+  inline: number[];
+  draws: number;
+}
+
 /**
  * Everything the user sees inside a text editor: the gutter icon, the dimmed
  * title at the end of the line, the hover card, and the CodeLens. Also keeps
@@ -14,6 +21,11 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly lensChanged = new vscode.EventEmitter<void>();
   private hasNoteAtCursor?: boolean;
+  /** Coalesces the redraws a burst of typing would otherwise ask for. */
+  private pending?: ReturnType<typeof setTimeout>;
+  /** What each document's marks were last drawn from, for the integration
+   *  tests: a decoration that has drifted cannot be read back from the API. */
+  private readonly drawn = new Map<string, Marks>();
   readonly onDidChangeCodeLenses = this.lensChanged.event;
 
   constructor(
@@ -24,7 +36,12 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
     this.gutter = vscode.window.createTextEditorDecorationType({
       gutterIconSize: 'contain',
       light: { gutterIconPath: icon('note-light.svg') },
-      dark: { gutterIconPath: icon('note-dark.svg') }
+      dark: { gutterIconPath: icon('note-dark.svg') },
+      // A decoration is a live range that the editor moves with the text. An
+      // edit at the mark's own position -- duplicating the line it is on --
+      // would otherwise widen it over both copies, and the gutter draws its
+      // icon on every line the range touches, so one note showed two icons.
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
     });
     this.inline = vscode.window.createTextEditorDecorationType({
       after: {
@@ -40,6 +57,15 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
       this.lensChanged,
       vscode.languages.registerCodeLensProvider({ scheme: 'file' }, this),
       vscode.window.onDidChangeVisibleTextEditors(() => this.refreshAll()),
+      // The notes say which line they are on; the editor's own tracking of the
+      // marks only approximates that, and an edit can leave a mark on the
+      // wrong line or on two. Drawing them again from the notes after an edit
+      // is what used to take reloading the window.
+      vscode.workspace.onDidChangeTextDocument((e) => {
+        if (e.contentChanges.length > 0 && this.store.relativePath(e.document.uri)) {
+          this.scheduleRefresh();
+        }
+      }),
       vscode.window.onDidChangeTextEditorSelection((e) => this.updateCursorContext(e.textEditor)),
       // Switching between two editors that are both on screen moves no cursor.
       vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -83,6 +109,22 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
     return this.store.byFile(file).filter((n) => n.line === line);
   }
 
+  /** One redraw for a burst of edits, on the next quiet moment. */
+  private scheduleRefresh(): void {
+    if (this.pending !== undefined) {
+      return;
+    }
+    this.pending = setTimeout(() => {
+      this.pending = undefined;
+      this.refreshAll();
+    }, 100);
+  }
+
+  /** Where this document's marks were last drawn, and how often. */
+  marks(document: vscode.TextDocument): Marks {
+    return this.drawn.get(document.uri.toString()) ?? { gutter: [], inline: [], draws: 0 };
+  }
+
   refreshAll(): void {
     for (const editor of vscode.window.visibleTextEditors) {
       this.refresh(editor);
@@ -98,13 +140,14 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
     if (!file) {
       editor.setDecorations(this.gutter, []);
       editor.setDecorations(this.inline, []);
+      this.record(editor, [], []);
       return;
     }
     const config = vscode.workspace.getConfiguration('laxative');
     const all = this.store.all();
     const byLine = new Map<number, Note[]>();
     for (const note of this.store.byFile(file)) {
-      const line = Math.min(note.line, Math.max(editor.document.lineCount - 1, 0));
+      const line = Math.min(note.line ?? 0, Math.max(editor.document.lineCount - 1, 0));
       byLine.set(line, [...(byLine.get(line) ?? []), note]);
     }
 
@@ -131,6 +174,20 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
     }
     editor.setDecorations(this.gutter, gutterRanges);
     editor.setDecorations(this.inline, inlineRanges);
+    this.record(editor, gutterRanges, inlineRanges);
+  }
+
+  private record(
+    editor: vscode.TextEditor,
+    gutter: vscode.DecorationOptions[],
+    inline: vscode.DecorationOptions[]
+  ): void {
+    const key = editor.document.uri.toString();
+    this.drawn.set(key, {
+      gutter: gutter.map((mark) => mark.range.start.line),
+      inline: inline.map((mark) => mark.range.start.line),
+      draws: (this.drawn.get(key)?.draws ?? 0) + 1
+    });
   }
 
   provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
@@ -142,7 +199,7 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
       return [];
     }
     return this.store.byFile(file).map((note) => {
-      const line = Math.min(note.line, Math.max(document.lineCount - 1, 0));
+      const line = Math.min(note.line ?? 0, Math.max(document.lineCount - 1, 0));
       // Plain text on purpose: the gutter bubble is the note's only icon, and
       // a codicon here would put a second one on the same line.
       return new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
@@ -155,6 +212,9 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
   }
 
   dispose(): void {
+    if (this.pending !== undefined) {
+      clearTimeout(this.pending);
+    }
     for (const d of this.disposables) {
       d.dispose();
     }

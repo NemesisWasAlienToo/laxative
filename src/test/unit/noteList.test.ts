@@ -32,6 +32,37 @@ describe('the notes list', () => {
     assert.strictEqual(list.groups[0].rows[0].description, undefined, 'the group already names the file');
   });
 
+  it('gathers notes that point at no line of code into a group of their own', () => {
+    const loose = { ...note({ id: 'loose1', title: 'Just a thought' }) } as ListNote;
+    delete loose.file;
+    delete loose.line;
+    delete loose.character;
+    const list = buildList([...notes, loose], { groupBy: 'file' });
+
+    assert.deepStrictEqual(
+      list.groups.map((group) => `${group.kind}:${group.label}`),
+      ['file:a.ts', 'file:b.ts', 'unlocated:no location'],
+      'after the files, since it belongs to no file'
+    );
+    const row = list.groups[2].rows[0];
+    assert.strictEqual(row.noteId, 'loose1');
+    assert.strictEqual(row.description, undefined, 'and there is no line to point at');
+    assert.match(row.tooltip, /Not attached to any line of code/);
+
+    // Everywhere else it is a note like any other.
+    assert.ok(list.visible.includes('loose1'));
+    assert.deepStrictEqual(
+      buildList([...notes, loose], { groupBy: 'tag' }).groups.map((g) => g.label),
+      ['#bug', '#perf', 'untagged'],
+      'grouped by hashtag it sits with the untagged notes'
+    );
+    assert.deepStrictEqual(
+      buildList([...notes, loose], { groupBy: 'file', query: { query: 'thought' } }).visible,
+      ['loose1'],
+      'and it is searched like any other'
+    );
+  });
+
   it('groups by hashtag, giving a note under two hashtags two rows with ids of their own', () => {
     const list = buildList(notes, { groupBy: 'tag' });
     assert.deepStrictEqual(

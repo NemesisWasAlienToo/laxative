@@ -3,6 +3,7 @@ import { NoteStore } from './store';
 import { pickNoteFile } from './storageSettings';
 import { Note } from './core/types';
 import { parse, serializeExport } from './core/schema';
+import { located } from './core/display';
 
 function defaultName(extension: string): string {
   const stamp = new Date().toISOString().slice(0, 10);
@@ -17,7 +18,9 @@ function toMarkdown(notes: readonly Note[], severalFiles: boolean): string {
       `## ${note.title}`,
       '',
       `- id: \`${note.id}\``,
-      `- location: \`${note.file}:${note.line + 1}:${note.character + 1}\``,
+      ...(located(note)
+        ? [`- location: \`${note.file}:${note.line + 1}:${note.character + 1}\``]
+        : ['- no location']),
       ...(severalFiles && note.store ? [`- note file: ${note.store}`] : []),
       `- updated: ${note.updatedAt}`,
       '',

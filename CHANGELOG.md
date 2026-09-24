@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.8.0
+
+- **Fixed: duplicating an annotated line left a gutter icon on the copy.** The
+  marks in an editor are live ranges the editor moves with the text, and an
+  edit at a mark's own position widened it across both lines, so one note drew
+  two icons until the window was reloaded. They no longer widen, and after any
+  edit the marks are drawn again from the notes themselves.
+
+- **Notes that are not about a line of code.** The **+** on the Notes view,
+  **Laxative: Add Note** or `Ctrl+Alt+N` writes a note about the workspace
+  itself. Such a note is linked, tagged, searched, shown in the graph and
+  exported like any other — it simply points nowhere, and nothing is drawn in
+  any editor for it. The Notes list gathers them under **no location**, the
+  reading panel says so instead of offering a link, and the file on disk
+  carries no location fields at all rather than an empty path at line 0.
+  There is no flag for any of this: a note has a location when it carries all
+  three of file, line and character, and a file with only some of them is read
+  as a note about no particular line.
+- **Adding a note at the cursor is its own button**, next to the **+**, with an
+  icon of its own; `Ctrl+Alt+M` is unchanged. With no editor open it now asks
+  for one rather than quietly writing a note that points nowhere — that is
+  what the **+** is for.
+- **The graph's options are on the background's own right-click menu**, where a
+  canvas is expected to keep them, along with laying the notes out again. The
+  Options button and the Tidy button are gone from the toolbar. Right-*drag* is
+  still the selection box: the menu opens when the press went nowhere.
+- **Right-clicking a note in the graph is about that note**: open it, go to its
+  code, edit it, copy a reference to it, delete it. The graph's own options are
+  the background's menu, and a note with no location is not offered a way to go
+  there. While a menu is up the graph behind it is not hovered by a pointer
+  that is on the menu; the note the menu belongs to stays lit, with its links,
+  so it is plain which note the items act on.
+- **What a double-click does is now two switches**: opening the note and going
+  to its code, either, both or neither. Going to the code alone is a way to
+  read through a graph without a panel opening over it every time.
+
 ## 0.7.4
 
 - In a remote window — SSH, WSL, a container — the file icon theme is installed

@@ -104,22 +104,31 @@
       return;
     }
 
-    const reveal = el('a', {
-      className: 'location',
-      textContent: `${state.meta.file}:${state.meta.line}:${state.meta.character}`,
-      href: '#'
-    });
-    reveal.addEventListener('click', (e) => {
-      e.preventDefault();
-      vscode.postMessage({ type: 'reveal' });
-    });
+    // A note with no location points at nothing: there is nowhere to link to
+    // and nowhere for Go to code to go.
+    const somewhere = typeof state.meta.file === 'string';
+    const reveal = somewhere
+      ? el('a', {
+          className: 'location',
+          textContent: `${state.meta.file}:${state.meta.line}:${state.meta.character}`,
+          href: '#'
+        })
+      : el('span', { className: 'location none', textContent: 'no location' });
+    if (somewhere) {
+      reveal.addEventListener('click', (e) => {
+        e.preventDefault();
+        vscode.postMessage({ type: 'reveal' });
+      });
+    }
 
     root.append(
       el(
         'div',
         { className: 'toolbar', role: 'toolbar' },
         action('Edit', 'edit', () => vscode.postMessage({ type: 'edit' })),
-        action('Go to code', 'goto', () => vscode.postMessage({ type: 'reveal' })),
+        ...(somewhere
+          ? [action('Go to code', 'goto', () => vscode.postMessage({ type: 'reveal' }))]
+          : []),
         action('Copy reference', 'link', () => vscode.postMessage({ type: 'copyRef' })),
         el('span', { className: 'spacer' }),
         action('Delete', 'trash', () => vscode.postMessage({ type: 'delete' }), 'danger')

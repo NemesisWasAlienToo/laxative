@@ -35,6 +35,7 @@
     file: '<path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3"/>',
     tag: '<path d="M2 2.5h5.2l6.3 6.3-5 5L2.2 7.5z"/><circle cx="5" cy="5.3" r="0.9"/>',
     untagged: '<circle cx="8" cy="8" r="4.5"/>',
+    unlocated: '<path d="M2.5 3h11v8.5H7.5L4.5 14v-2.5h-2z"/>',
     store: '<path d="M3.5 2h9v12h-9zM6 2v12M8 5.5h2.5M8 8h2.5"/>',
     reveal: '<path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5"/>',
     edit: '<path d="M10.8 2.7l2.5 2.5L6 12.5l-3.2.7.7-3.2z"/>',
@@ -238,6 +239,7 @@
     );
     for (const [label, command] of [
       ['Add note at cursor', 'laxative.addNote'],
+      ['Add note', 'laxative.addLooseNote'],
       ['Import notes', 'laxative.import']
     ]) {
       const button = document.createElement('button');

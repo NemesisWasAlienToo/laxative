@@ -402,10 +402,15 @@ describe('notes list webview', () => {
     const buttons = [...doc().querySelectorAll('#empty .welcome')] as any[];
     assert.deepStrictEqual(
       buttons.map((b) => b.textContent),
-      ['Add note at cursor', 'Import notes']
+      ['Add note at cursor', 'Add note', 'Import notes']
     );
     click(buttons[0]);
     assert.deepStrictEqual(plain(sent('command')), [{ type: 'command', command: 'laxative.addNote' }]);
+    click(buttons[1]);
+    assert.deepStrictEqual(plain(sent('command')).at(-1), {
+      type: 'command',
+      command: 'laxative.addLooseNote'
+    });
 
     harness.send(byFile({ groups: [], total: 0, summary: '', hasFolder: false }));
     assert.match(doc().getElementById('empty').textContent, /Open a folder/);
@@ -445,21 +450,20 @@ describe('graph webview', () => {
     <div id="hud">
       <input id="filter" type="text">
       <input id="exclude" type="text">
-      <div class="menu-anchor">
-        <button id="optionsButton" type="button" aria-expanded="false">Options</button>
-        <div id="options" hidden>
-          <label><input id="showFiles" type="checkbox" checked></label>
-          <label><input id="showTags" type="checkbox" checked></label>
-          <label><input id="linkPull" type="checkbox" checked></label>
-          <label><input id="showTip" type="checkbox" checked></label>
-          <label><input id="openReveals" type="checkbox"></label>
-        </div>
-      </div>
-      <button id="tidy" type="button">Tidy</button>
       <span id="stats"></span>
     </div>
     <canvas id="canvas"></canvas>
-    <div id="tip" hidden></div>`;
+    <div id="tip" hidden></div>
+    <div id="options" hidden>
+      <label><input id="showFiles" type="checkbox" checked></label>
+      <label><input id="showTags" type="checkbox" checked></label>
+      <label><input id="linkPull" type="checkbox" checked></label>
+      <label><input id="showTip" type="checkbox" checked></label>
+      <label><input id="openNote" type="checkbox" checked></label>
+      <label><input id="openReveals" type="checkbox"></label>
+      <button id="tidy" type="button">Tidy</button>
+    </div>
+    <div id="nodeMenu" hidden></div>`;
 
   /** Records what was drawn, and lets the test control the element's size. */
   function prepareCanvas(
@@ -532,7 +536,7 @@ describe('graph webview', () => {
     assert.ok(harness.window.__context.calls.arc > 0, 'nodes are drawn');
     assert.strictEqual(
       harness.window.document.getElementById('stats').textContent,
-      '2 notes · 1 links · double-click to open'
+      '2 notes · 1 links · right-click for options'
     );
   });
 
@@ -666,21 +670,29 @@ describe('graph webview', () => {
     assert.strictEqual(opens().length, 0, 'nor does a plain click on it');
 
     mouse(canvas, 'dblclick', 250, 200);
-    assert.deepStrictEqual(plain(opens()), [{ type: 'open', id: 'solo', reveal: false }]);
+    assert.deepStrictEqual(plain(opens()), [
+      { type: 'open', id: 'solo', open: true, reveal: false }
+    ]);
   });
 
-  it('keeps its options in a dropdown menu that closes like a VS Code menu', () => {
+  it('opens its options where you right-click the background, not from a toolbar', () => {
     harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
     const doc = harness.window.document;
-    const button = doc.getElementById('optionsButton');
+    const canvas = doc.getElementById('canvas');
     const menu = doc.getElementById('options');
+    const press = (type: string, over: Record<string, unknown> = {}) =>
+      canvas.dispatchEvent(
+        new harness.window.MouseEvent(type, { bubbles: true, clientX: 300, clientY: 220, ...over })
+      );
     const click = (target: any, type = 'click') =>
       target.dispatchEvent(new harness.window.MouseEvent(type, { bubbles: true }));
 
     assert.strictEqual(menu.hidden, true, 'closed to begin with');
-    click(button);
-    assert.strictEqual(menu.hidden, false, 'the button opens it');
-    assert.strictEqual(button.getAttribute('aria-expanded'), 'true');
+    press('mousedown', { button: 2 });
+    harness.window.dispatchEvent(
+      new harness.window.MouseEvent('mouseup', { button: 2, clientX: 300, clientY: 220 })
+    );
+    assert.strictEqual(menu.hidden, false, 'a right-click that went nowhere opens it');
 
     const toggle = doc.getElementById('showTags');
     click(toggle, 'mousedown');
@@ -688,13 +700,165 @@ describe('graph webview', () => {
     assert.strictEqual(menu.hidden, false, 'ticking an option leaves it open');
     assert.strictEqual(toggle.checked, false, 'and the option really toggled');
 
-    click(doc.getElementById('canvas'), 'mousedown');
+    click(canvas, 'mousedown');
     assert.strictEqual(menu.hidden, true, 'a click anywhere else closes it');
 
-    click(button);
-    doc.dispatchEvent(new harness.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    assert.strictEqual(menu.hidden, true, 'and so does Escape');
-    assert.strictEqual(button.getAttribute('aria-expanded'), 'false');
+    // A right-*drag* is the selection box, so it must not leave a menu behind.
+    press('mousedown', { button: 2 });
+    harness.window.dispatchEvent(
+      new harness.window.MouseEvent('mouseup', { button: 2, clientX: 460, clientY: 380 })
+    );
+    assert.strictEqual(menu.hidden, true, 'dragging one out is still a selection box');
+
+    press('mousedown', { button: 2 });
+    harness.window.dispatchEvent(
+      new harness.window.MouseEvent('mouseup', { button: 2, clientX: 300, clientY: 220 })
+    );
+    harness.window.document.dispatchEvent(
+      new harness.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    );
+    assert.strictEqual(menu.hidden, true, 'and Escape closes it');
+  });
+
+  it('gives a note its own menu on right-click, about that note', async () => {
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { fixedLayout: true, recordArcs: true })
+    );
+    harness.send({
+      type: 'graph',
+      nodes: [{ id: 'solo', title: 'Solo', file: 'src/a.ts', line: 1, tags: [], excerpt: '' }],
+      edges: [],
+      broken: []
+    });
+    await delay(60);
+    const doc = harness.window.document;
+    const canvas = doc.getElementById('canvas');
+    const menu = doc.getElementById('nodeMenu');
+    const options = doc.getElementById('options');
+    const [x, y] = harness.window.__context.arcs.at(-1);
+    const rightClick = (atX: number, atY: number) => {
+      canvas.dispatchEvent(
+        new harness.window.MouseEvent('mousedown', {
+          button: 2,
+          clientX: atX,
+          clientY: atY,
+          bubbles: true
+        })
+      );
+      harness.window.dispatchEvent(
+        new harness.window.MouseEvent('mouseup', { button: 2, clientX: atX, clientY: atY })
+      );
+    };
+    const labels = () =>
+      [...menu.querySelectorAll('button')].map((button: any) => button.textContent);
+
+    rightClick(x, y);
+    assert.strictEqual(menu.hidden, false, 'right-clicking a note opens its own menu');
+    assert.strictEqual(options.hidden, true, 'and not the graph options');
+    assert.strictEqual(menu.querySelector('.head').textContent, 'Solo', 'named after the note');
+    assert.deepStrictEqual(labels(), [
+      'Open note',
+      'Go to code',
+      'Edit note',
+      'Copy reference',
+      'Delete note'
+    ]);
+
+    [...menu.querySelectorAll('button')]
+      .find((button: any) => button.textContent === 'Go to code')
+      .dispatchEvent(new harness.window.MouseEvent('click', { bubbles: true }));
+    assert.deepStrictEqual(plain(harness.posted.at(-1)), {
+      type: 'note',
+      command: 'laxative.revealNote',
+      id: 'solo'
+    });
+    assert.strictEqual(menu.hidden, true, 'choosing something closes it');
+
+    // The background still answers with the graph's own options.
+    rightClick(700, 520);
+    assert.strictEqual(options.hidden, false, 'empty canvas opens the graph options');
+    assert.strictEqual(menu.hidden, true, 'and closes the note menu');
+
+    // A note with nowhere to go does not offer to go there.
+    harness.send({
+      type: 'graph',
+      nodes: [{ id: 'loose', title: 'Loose', tags: [], excerpt: '' }],
+      edges: [],
+      broken: []
+    });
+    await delay(60);
+    const [lx, ly] = harness.window.__context.arcs.at(-1);
+    rightClick(lx, ly);
+    assert.strictEqual(menu.hidden, false, 'a note with no location still has a menu');
+    assert.ok(!labels().includes('Go to code'), 'but nowhere to go');
+  });
+
+  it('does not hover the graph through an open menu', async () => {
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { fixedLayout: true, recordArcs: true })
+    );
+    harness.send({
+      type: 'graph',
+      nodes: [{ id: 'solo', title: 'Solo', file: 'src/a.ts', line: 1, tags: [], excerpt: 'body' }],
+      edges: [],
+      broken: []
+    });
+    await delay(60);
+    const doc = harness.window.document;
+    const canvas = doc.getElementById('canvas');
+    const menu = doc.getElementById('nodeMenu');
+    const tip = doc.getElementById('tip');
+    const [x, y] = harness.window.__context.arcs.at(-1);
+    const move = (atX: number, atY: number) =>
+      harness.window.dispatchEvent(
+        new harness.window.MouseEvent('mousemove', { clientX: atX, clientY: atY, bubbles: true })
+      );
+
+    move(x, y);
+    assert.strictEqual(tip.hidden, false, 'the note is hovered when nothing is in the way');
+
+    canvas.dispatchEvent(
+      new harness.window.MouseEvent('mousedown', { button: 2, clientX: x, clientY: y, bubbles: true })
+    );
+    harness.window.dispatchEvent(
+      new harness.window.MouseEvent('mouseup', { button: 2, clientX: x, clientY: y })
+    );
+    assert.strictEqual(menu.hidden, false, 'its menu is open');
+    assert.strictEqual(tip.hidden, true, 'which puts the hover card away');
+
+    // Moving across the menu is not moving across the graph behind it.
+    move(x + 1, y + 1);
+    assert.strictEqual(tip.hidden, true, 'and the graph is not hovered through it');
+    move(700, 40);
+    assert.strictEqual(tip.hidden, true, 'wherever the pointer goes while it is open');
+
+    harness.window.document.dispatchEvent(
+      new harness.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    );
+    move(x, y);
+    assert.strictEqual(tip.hidden, false, 'closing it gives the graph the pointer back');
+  });
+
+  it('lays the notes out again from the menu, where Tidy now lives', async () => {
+    harness = load(
+      'graph.js',
+      HTML,
+      prepareCanvas({ width: 800, height: 600 }, { recordArcs: true })
+    );
+    harness.send(graph);
+    await delay(80);
+    const doc = harness.window.document;
+    const before = harness.window.__context.arcs.length;
+    doc.getElementById('tidy').dispatchEvent(new harness.window.MouseEvent('click', { bubbles: true }));
+    await delay(80);
+    assert.ok(
+      harness.window.__context.arcs.length > before,
+      'the layout is running again after Tidy'
+    );
   });
 
   it('goes to the code as well when opening a note, if asked to', async () => {
@@ -718,20 +882,34 @@ describe('graph webview', () => {
       );
     const last = () => plain(harness.posted.at(-1));
 
-    doubleClick();
-    assert.deepStrictEqual(last(), { type: 'open', id: 'solo', reveal: false }, 'off by default');
+    const tick = (id: string, on: boolean) => {
+      const option = harness.window.document.getElementById(id);
+      option.checked = on;
+      option.dispatchEvent(new harness.window.Event('change'));
+    };
 
-    const option = harness.window.document.getElementById('openReveals');
-    option.checked = true;
-    option.dispatchEvent(new harness.window.Event('change'));
     doubleClick();
-    assert.deepStrictEqual(last(), { type: 'open', id: 'solo', reveal: true }, 'on once ticked');
+    assert.deepStrictEqual(
+      last(),
+      { type: 'open', id: 'solo', open: true, reveal: false },
+      'the note opens, the editor stays where it is'
+    );
+
+    tick('openReveals', true);
+    doubleClick();
+    assert.deepStrictEqual(last(), { type: 'open', id: 'solo', open: true, reveal: true }, 'both');
+
+    // Only the code: browsing the graph without a panel opening over it.
+    tick('openNote', false);
+    doubleClick();
+    assert.deepStrictEqual(last(), { type: 'open', id: 'solo', open: false, reveal: true });
 
     doubleClick(true);
     assert.deepStrictEqual(last(), { type: 'reveal', id: 'solo' }, 'Alt still goes to the code alone');
 
     await delay(300); // persisting is debounced
-    assert.strictEqual(harness.state.current.revealOnOpen, true, 'the choice is remembered');
+    assert.strictEqual(harness.state.current.revealOnOpen, true, 'the choices are remembered');
+    assert.strictEqual(harness.state.current.openOnDouble, false);
   });
 
   it('still draws when the webview gets its size only after the script ran', async () => {

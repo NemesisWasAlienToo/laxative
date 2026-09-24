@@ -37,25 +37,11 @@ body {
   font-family: inherit;
 }
 #filter:focus, #exclude:focus { outline: 1px solid var(--vscode-focusBorder); }
-.menu-anchor { position: relative; }
-#optionsButton, #tidy {
-  padding: 0.25rem 0.6rem;
-  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-  background: var(--vscode-button-secondaryBackground, transparent);
-  border: 1px solid var(--vscode-contrastBorder, var(--vscode-input-border, transparent));
-  border-radius: 3px;
-  font: inherit;
-  font-size: 0.85em;
-  cursor: pointer;
-}
-#optionsButton:hover, #optionsButton.open, #tidy:hover {
-  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
-}
-#optionsButton:focus-visible, #tidy:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-#options {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+.menu {
+  /* Opened where the pointer is: a context menu, not a dropdown anchored to
+     something on the toolbar. */
+  position: fixed;
+  z-index: 20;
   min-width: 15rem;
   padding: 0.3rem 0;
   display: flex;
@@ -65,24 +51,42 @@ body {
   border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent));
   border-radius: 5px;
   box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
-  z-index: 20;
 }
-#options[hidden] { display: none; }
-#options label {
+.menu[hidden] { display: none; }
+.menu label,
+.menu button {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  margin: 0;
   padding: 0.3rem 0.8rem;
+  font: inherit;
   font-size: 0.9em;
+  text-align: left;
   white-space: nowrap;
+  color: inherit;
+  background: none;
+  border: none;
+  border-radius: 0;
   cursor: pointer;
 }
-#options label:hover, #options label:focus-within {
+.menu label:hover, .menu label:focus-within,
+.menu button:hover, .menu button:focus-visible {
   color: var(--vscode-menu-selectionForeground, inherit);
   background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
 }
-#options input { margin: 0; }
-#options hr {
+.menu input { margin: 0; }
+/* Which note the menu is about, so an item is never ambiguous. */
+.menu .head {
+  max-width: 22rem;
+  padding: 0.25rem 0.8rem 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.menu hr {
   width: 100%;
   margin: 0.3rem 0;
   border: none;

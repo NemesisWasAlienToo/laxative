@@ -364,6 +364,9 @@ export class NoteStore implements vscode.Disposable {
     this.byId = new Map(this.merged.map((note) => [note.id, note]));
     this.bySource = new Map();
     for (const note of this.merged) {
+      if (note.file === undefined) {
+        continue; // A note about no line of code is on no source file either.
+      }
       // `merged` is sorted by file, then line, then column, so each list is
       // already in the order the file is read.
       const list = this.bySource.get(note.file);
@@ -439,11 +442,15 @@ export class NoteStore implements vscode.Disposable {
     return [...this.bySource.keys()].sort();
   }
 
+  /**
+   * A new note. Leave the location out and it is a note about the workspace
+   * rather than about a line in it.
+   */
   async create(
     input: {
-      file: string;
-      line: number;
-      character: number;
+      file?: string;
+      line?: number;
+      character?: number;
       body: string;
     },
     target?: string
@@ -457,9 +464,9 @@ export class NoteStore implements vscode.Disposable {
       id: newId(new Set(this.merged.map((n) => n.id))),
       title: deriveTitle(input.body),
       body: input.body,
-      file: input.file,
-      line: input.line,
-      character: input.character,
+      ...(input.file !== undefined
+        ? { file: input.file, line: input.line ?? 0, character: input.character ?? 0 }
+        : {}),
       tags: parseTags(input.body),
       store: file.name,
       createdAt: now,

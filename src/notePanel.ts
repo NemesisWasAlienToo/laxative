@@ -162,8 +162,8 @@ export class NotePanel {
       empty: body.trim() === '',
       meta: {
         file: note.file,
-        line: note.line + 1,
-        character: note.character + 1,
+        line: note.line === undefined ? undefined : note.line + 1,
+        character: note.character === undefined ? undefined : note.character + 1,
         updatedAt: note.updatedAt,
         tags: parseTags(body)
       }

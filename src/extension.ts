@@ -17,6 +17,7 @@ import { GraphView } from './graphView';
 import { Diagnostics, showDiagnostics } from './diagnostics';
 import { exportNotes, importNotes } from './portability';
 import { Note } from './core/types';
+import { located, noteAnchor } from './core/display';
 import { tagIndex } from './core/tags';
 
 /** The list and CodeLenses pass an id; the list's right-click menu passes `{ noteId }`. */
@@ -71,7 +72,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const picked = await vscode.window.showQuickPick(
       notes.map((note) => ({
         label: `$(comment) ${note.title}`,
-        description: `${note.file}:${note.line + 1}:${note.character + 1}${
+        description: `${noteAnchor(note) ?? 'no location'}${
           note.tags.length > 0 ? '  ' + note.tags.map((t) => '#' + t).join(' ') : ''
         }`,
         detail: note.body.split('\n').slice(1).join(' ').trim().slice(0, 120) || undefined,
@@ -83,6 +84,14 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   const revealNote = async (note: Note): Promise<void> => {
+    // A note with no location points at nothing, so there is nowhere to go.
+    if (!located(note)) {
+      void vscode.window.setStatusBarMessage(
+        `Laxative: "${note.title}" is not attached to a line of code.`,
+        4000
+      );
+      return;
+    }
     const uri = store.absoluteUri(note.file);
     if (!uri) {
       return;
@@ -161,20 +170,16 @@ export function activate(context: vscode.ExtensionContext): void {
     return picked?.name;
   };
 
-  command('laxative.addNote', async (arg: unknown) => {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || !requireStore()) {
-      return;
-    }
-    const file = store.relativePath(editor.document.uri);
-    if (!file) {
-      void vscode.window.showWarningMessage(
-        'Laxative: that file is outside the workspace folder, so it cannot be annotated.'
-      );
-      return;
-    }
-    // Read before anything is asked: a prompt takes the focus with it.
-    const position = editor.selection.active;
+  /**
+   * Writes a new note and opens it for editing. `where` is the line it is
+   * attached to, or nothing at all: a note with no location is a note about
+   * the workspace rather than about a line in it, and everything else — the
+   * list, the graph, references, hashtags, search — treats it the same.
+   */
+  const newNote = async (
+    where: { file: string; line: number; character: number } | undefined,
+    arg: unknown
+  ): Promise<void> => {
     // Called with { target } there is nothing to ask, which also lets a
     // keybinding be bound straight to one note file.
     const named = (arg as { target?: unknown } | undefined)?.target;
@@ -196,15 +201,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     // Straight into a real editor: the note is a markdown document, so writing
     // one gets the full editor rather than a single-line prompt.
-    const note = await store.create(
-      {
-        file,
-        line: position.line,
-        character: position.character,
-        body: ''
-      },
-      target
-    );
+    const note = await store.create({ ...where, body: '' }, target);
     if (!note) {
       void vscode.window.showWarningMessage(
         'Laxative: no note file is switched on. Run Laxative: Select Note Files.'
@@ -214,12 +211,46 @@ export function activate(context: vscode.ExtensionContext): void {
     annotations.refreshAll();
     await NoteDocuments.open(note);
     // Which file it landed in only matters when there is more than one.
-    const where = store.enabledFiles().length > 1 ? ` Saved in ${note.store}.` : '';
+    const which = store.enabledFiles().length > 1 ? ` Saved in ${note.store}.` : '';
+    const attached = where ? '' : ' This one is not attached to any line of code.';
     void vscode.window.setStatusBarMessage(
       'Laxative: first line becomes the title. Save to keep the note; close it empty to discard.' +
-        where,
+        which +
+        attached,
       6000
     );
+  };
+
+  command('laxative.addNote', async (arg: unknown) => {
+    if (!requireStore()) {
+      return;
+    }
+    const editor = vscode.window.activeTextEditor;
+    // Adding a note that points nowhere has its own command now, so this one
+    // says what it needs rather than quietly doing something else.
+    if (!editor) {
+      void vscode.window.showWarningMessage(
+        'Laxative: put the cursor in a file first, or use Laxative: Add Note for a note about no particular line.'
+      );
+      return;
+    }
+    const file = store.relativePath(editor.document.uri);
+    if (!file) {
+      void vscode.window.showWarningMessage(
+        'Laxative: that file is outside the workspace folder, so it cannot be annotated.'
+      );
+      return;
+    }
+    // Read before anything is asked: a prompt takes the focus with it.
+    const position = editor.selection.active;
+    await newNote({ file, line: position.line, character: position.character }, arg);
+  });
+
+  /** A note about no particular line, wherever you are when you ask for it. */
+  command('laxative.addLooseNote', async (arg: unknown) => {
+    if (requireStore()) {
+      await newNote(undefined, arg);
+    }
   });
 
   command('laxative.openNote', async (arg: unknown) => {
@@ -244,7 +275,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (vscode.workspace.getConfiguration('laxative').get<boolean>('confirmDelete', true)) {
       const confirm = await vscode.window.showWarningMessage(
         `Delete note "${note.title}"?`,
-        { modal: true, detail: `${note.file}:${note.line + 1}` },
+        { modal: true, detail: noteAnchor(note) ?? 'not attached to any line of code' },
         'Delete'
       );
       if (confirm !== 'Delete') {
@@ -412,6 +443,13 @@ export function activate(context: vscode.ExtensionContext): void {
     remote: vscode.env.remoteName ?? null,
     icons: tree.iconReport()
   }));
+
+  // Where the gutter and inline marks were last drawn, for the integration
+  // tests: the API gives no way to read a decoration back out of an editor.
+  command('laxative._marks', () => {
+    const editor = vscode.window.activeTextEditor;
+    return editor ? annotations.marks(editor.document) : undefined;
+  });
 
   // Runs the one-time clean-up of the old settings, for the integration tests.
   command('laxative._migrate', () => migrateLegacyFiles(store));
