@@ -2,7 +2,7 @@
   "name": "laxative",
   "displayName": "Laxative",
   "description": "Attach markdown notes to places in your code without editing the code. Notes live in a git-friendly file, cross-reference each other, group by hashtag, and can be browsed as a list or a graph.",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -150,7 +150,7 @@
         "command": "laxative.addNote",
         "title": "Add Note at Cursor",
         "category": "Laxative",
-        "icon": "$(add)"
+        "icon": "$(comment-add)"
       },
       {
         "command": "laxative.openNote",
@@ -307,6 +307,12 @@
         "title": "Rename Note File...",
         "category": "Laxative",
         "icon": "$(edit)"
+      },
+      {
+        "command": "laxative.addLooseNote",
+        "title": "Add Note",
+        "category": "Laxative",
+        "icon": "$(add)"
       }
     ],
     "menus": {
@@ -365,19 +371,24 @@
       ],
       "view/title": [
         {
-          "command": "laxative.addNote",
+          "command": "laxative.addLooseNote",
           "when": "view == laxative.notesView",
           "group": "navigation@1"
         },
         {
+          "command": "laxative.addNote",
+          "when": "view == laxative.notesView",
+          "group": "navigation@2"
+        },
+        {
           "command": "laxative.showGraph",
           "when": "view == laxative.notesView",
-          "group": "navigation@3"
+          "group": "navigation@4"
         },
         {
           "command": "laxative.refresh",
           "when": "view == laxative.notesView",
-          "group": "navigation@4"
+          "group": "navigation@5"
         },
         {
           "command": "laxative.export",
@@ -407,12 +418,12 @@
         {
           "command": "laxative.filterByTag",
           "when": "view == laxative.notesView && !laxative.hasTagFilter",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "laxative.clearTagFilter",
           "when": "view == laxative.notesView && laxative.hasTagFilter",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "laxative.configureStorage",
@@ -442,12 +453,12 @@
         {
           "command": "laxative.clearSearch",
           "when": "view == laxative.notesView && laxative.hasSearch",
-          "group": "navigation@3"
+          "group": "navigation@4"
         },
         {
           "command": "laxative.searchNotes",
           "when": "view == laxative.notesView",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "laxative.collapseAll",
@@ -504,6 +515,11 @@
         "key": "ctrl+alt+m",
         "mac": "cmd+alt+m",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "laxative.addLooseNote",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n"
       },
       {
         "command": "laxative.searchNotes",

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { NoteStore } from './store';
 import { Note } from './core/types';
+import { noteAnchor } from './core/display';
 import { tagIndex } from './core/tags';
 import { refPrefix, slugForTitle, tagPrefix } from './core/editing';
 
@@ -46,7 +47,7 @@ export class NoteDocuments implements vscode.FileSystemProvider, vscode.Disposab
   static uriFor(note: Note): vscode.Uri {
     const name =
       note.body.trim() === ''
-        ? `${note.file.split('/').pop() ?? 'note'}-${note.line + 1}`
+        ? `${note.file?.split('/').pop() ?? 'note'}-${(note.line ?? 0) + 1}`
         : slugForTitle(note.title);
     return vscode.Uri.from({
       scheme: NOTE_SCHEME,
@@ -218,9 +219,9 @@ class NoteCompletions implements vscode.CompletionItemProvider {
         .filter((note) => note.id !== self)
         .map((note) => {
           const item = new vscode.CompletionItem(note.title, vscode.CompletionItemKind.Reference);
-          item.detail = `${note.file}:${note.line + 1}`;
+          item.detail = noteAnchor(note) ?? 'no location';
           item.documentation = new vscode.MarkdownString(note.body.slice(0, 400));
-          item.filterText = `${note.title} ${note.file} ${note.id}`;
+          item.filterText = `${note.title} ${note.file ?? ''} ${note.id}`;
           item.insertText = `[[${note.id}|${note.title}]]`;
           item.range = range;
           return item;

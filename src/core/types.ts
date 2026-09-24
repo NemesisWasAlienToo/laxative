@@ -5,12 +5,19 @@ export interface Note {
   title: string;
   /** Markdown. May contain `[[other-note-id]]` references. */
   body: string;
-  /** Workspace-relative, posix-separated path of the annotated file. */
-  file: string;
+  /**
+   * Where the note points, when it points anywhere. A note with no location is
+   * just a note: it belongs to the workspace rather than to a line of code,
+   * nothing is drawn in an editor for it, and it is still linked, tagged,
+   * searched and shown in the graph like any other.
+   *
+   * All three travel together: a note has a location or it has none.
+   */
+  file?: string;
   /** 0-based line of the anchor. */
-  line: number;
+  line?: number;
   /** 0-based column of the anchor within that line. */
-  character: number;
+  character?: number;
   tags: string[];
   /**
    * Which note file this note was read from. Assigned when the store loads a

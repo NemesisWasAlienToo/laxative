@@ -14,8 +14,9 @@
   const tidy = /** @type {HTMLButtonElement} */ (document.getElementById('tidy'));
   const openReveals = /** @type {HTMLInputElement} */ (document.getElementById('openReveals'));
   const linkPull = /** @type {HTMLInputElement} */ (document.getElementById('linkPull'));
-  const optionsButton = /** @type {HTMLButtonElement} */ (document.getElementById('optionsButton'));
+  const openNote = /** @type {HTMLInputElement} */ (document.getElementById('openNote'));
   const options = /** @type {HTMLElement} */ (document.getElementById('options'));
+  const nodeMenu = /** @type {HTMLElement} */ (document.getElementById('nodeMenu'));
   const stats = document.getElementById('stats');
 
   const PALETTE = [
@@ -27,6 +28,9 @@
   let edges = [];
   let view = { x: 0, y: 0, scale: 1 };
   let hovered = null;
+  /** The note an open menu belongs to. It stays lit while its menu is up, and
+   *  nothing behind the menu is hovered by a pointer that is on the menu. */
+  let menuNode = null;
   let dragging = null;
   let panning = null;
   /** Ids of the notes you have picked out. Grabbing any one of them moves the
@@ -37,6 +41,10 @@
   let dragFrom = null;
   /** A selection box being drawn, in world coordinates. */
   let marquee = null;
+  /** Where a right press started and what was under it, so a press that goes
+   *  nowhere opens a menu — the note's own, or the graph's — while one that
+   *  moves draws a selection box. */
+  let rightPressed = null;
   /** A left press on empty canvas: if it never moves, it was a click, which
    *  clears the selection the way clicking empty space does everywhere else. */
   let pressedEmpty = null;
@@ -50,9 +58,10 @@
   /** The hover card is useful until it is sitting on top of what you want to
    *  see, so it can be switched off without losing the hover highlight. */
   let tooltips = true;
-  /** Opening a note also jumps to the code it is attached to. Off by default:
-   *  the graph is for browsing, and moving the editor on every double-click
-   *  is disruptive unless you have asked for it. */
+  /** What a double-click does, as two independent switches: either, both or
+   *  neither. Going to the code alone is a way to browse the graph without a
+   *  reading panel opening over it every time. */
+  let openOnDouble = true;
   let revealOnOpen = false;
   /** Links act as springs, pulling linked notes towards each other. Off, you
    *  can put linked notes as far apart as you like and they stay there; the
@@ -125,6 +134,7 @@
       groupByFile,
       groupByTag,
       tooltips,
+      openOnDouble,
       revealOnOpen,
       linkTension,
       arranged
@@ -157,7 +167,13 @@
     settled = false;
   }
 
+  /** A note attached to nothing has no file to take a colour from. */
+  const NO_FILE_COLOUR = '#8c8c8c';
+
   function colorFor(file) {
+    if (!file) {
+      return NO_FILE_COLOUR;
+    }
     let hash = 0;
     for (let i = 0; i < file.length; i++) {
       hash = (hash * 31 + file.charCodeAt(i)) >>> 0;
@@ -217,7 +233,7 @@
       }
       // Everything a filter looks at, lower-cased once here: this is read for
       // every node on every frame, so it must not be built on every frame.
-      const search = [n.title, n.excerpt, n.file, ...(n.tags || []).map((t) => '#' + t)]
+      const search = [n.title, n.excerpt, n.file || '', ...(n.tags || []).map((t) => '#' + t)]
         .join('\n')
         .toLowerCase();
       return { ...n, search, x, y, hx: x, hy: y, vx: 0, vy: 0, degree: 0 };
@@ -310,6 +326,9 @@
     if (groupByFile) {
       const byFile = new Map();
       for (const node of nodes) {
+        if (!node.file) {
+          continue; // Nothing to share a file with.
+        }
         byFile.set(node.file, [...(byFile.get(node.file) || []), node]);
       }
       chain(byFile, 'file');
@@ -703,7 +722,7 @@
     const count = selected.size;
     stats.textContent =
       `${nodes.length} notes · ${edges.length} links · ` +
-      (count > 0 ? `${count} selected · Esc to clear` : 'double-click to open');
+      (count > 0 ? `${count} selected · Esc to clear` : 'right-click for options');
   }
 
   function select(ids) {
@@ -724,6 +743,9 @@
     // trackpads. With a modifier held it adds to what is already selected.
     if (e.button === 2 || (e.button === 0 && e.shiftKey && !node)) {
       e.preventDefault();
+      if (e.button === 2) {
+        rightPressed = { x: e.clientX, y: e.clientY, node };
+      }
       marquee = {
         x0: point.x,
         y0: point.y,
@@ -801,16 +823,20 @@
       view.y = e.clientY - panning.y;
       return;
     }
-    const node = nodeAt(point);
+    // A menu is in front of the graph: the pointer moving across it is on the
+    // menu, not on whatever the menu is covering. The note the menu is about
+    // stays lit, so it is plain which note the items act on.
+    const overMenu = !options.hidden || !nodeMenu.hidden;
+    const node = overMenu ? menuNode : nodeAt(point);
     hovered = node;
-    if (node && tooltips) {
+    if (node && tooltips && !overMenu) {
       tip.hidden = false;
       tip.innerHTML = '';
       const title = document.createElement('b');
       title.textContent = node.title;
       const where = document.createElement('div');
       where.className = 'where';
-      where.textContent = `${node.file}:${node.line + 1}`;
+      where.textContent = node.file ? `${node.file}:${node.line + 1}` : 'no location';
       const excerpt = document.createElement('div');
       excerpt.className = 'excerpt';
       excerpt.textContent = node.excerpt;
@@ -834,6 +860,18 @@
     if (dragging || panning) {
       saveStateSoon();
     }
+    // A right-click that never moved is a click for the menu, not a box.
+    if (rightPressed && Math.hypot(e.clientX - rightPressed.x, e.clientY - rightPressed.y) < 4) {
+      // A note's own menu when the press was on a note, the graph's options
+      // when it was on the background.
+      const at = { x: e.clientX, y: e.clientY };
+      if (rightPressed.node) {
+        setNodeMenu(rightPressed.node, at);
+      } else {
+        setMenu(true, at);
+      }
+    }
+    rightPressed = null;
     if (pressedEmpty && Math.hypot(e.clientX - pressedEmpty.x, e.clientY - pressedEmpty.y) < 4) {
       select([]);
     }
@@ -854,7 +892,7 @@
       vscode.postMessage(
         e.altKey
           ? { type: 'reveal', id: node.id }
-          : { type: 'open', id: node.id, reveal: revealOnOpen }
+          : { type: 'open', id: node.id, open: openOnDouble, reveal: revealOnOpen }
       );
     }
   });
@@ -913,33 +951,107 @@
     revealOnOpen = openReveals.checked;
     saveStateSoon();
   });
-
-  // The options menu: a button that drops a small menu down, closed again by
-  // a click anywhere else or by Escape, the way VS Code's own menus behave.
-  function setMenu(open) {
-    options.hidden = !open;
-    optionsButton.setAttribute('aria-expanded', String(open));
-    optionsButton.classList.toggle('open', open);
-    if (open) {
-      const first = options.querySelector('input');
-      if (first) first.focus();
-    }
-  }
-  optionsButton.addEventListener('click', (e) => {
-    e.stopPropagation();
-    setMenu(options.hidden);
+  openNote.addEventListener('change', () => {
+    openOnDouble = openNote.checked;
+    saveStateSoon();
   });
-  options.addEventListener('mousedown', (e) => e.stopPropagation());
-  options.addEventListener('click', (e) => e.stopPropagation());
+
+  /** Put at the pointer, then pulled back inside the view if it would hang
+   *  off the bottom or the right. */
+  function place(menu, at) {
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    const box = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(at.x, window.innerWidth - box.width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(at.y, window.innerHeight - box.height - 4))}px`;
+  }
+
+  function closeMenus() {
+    options.hidden = true;
+    nodeMenu.hidden = true;
+    menuNode = null;
+  }
+
+  /**
+   * The options are the background's own context menu: right-click where there
+   * is no note and they open there, the way a canvas is expected to behave.
+   * Right-*drag* is still the selection box, so the menu only opens when the
+   * press went nowhere.
+   */
+  function setMenu(open, at) {
+    closeMenus();
+    options.hidden = !open;
+    if (!open) {
+      return;
+    }
+    tip.hidden = true;
+    place(options, at);
+    const first = options.querySelector('input');
+    if (first) first.focus();
+  }
+
+  /** What a note's menu offers. `located` items need somewhere to go. */
+  const NODE_ITEMS = [
+    { label: 'Open note', command: 'laxative.openNote' },
+    { label: 'Go to code', command: 'laxative.revealNote', located: true },
+    { label: 'Edit note', command: 'laxative.editNote' },
+    { label: 'Copy reference', command: 'laxative.copyReference' },
+    { separator: true },
+    { label: 'Delete note', command: 'laxative.deleteNote' }
+  ];
+
+  /**
+   * A note's own context menu. Right-clicking a note asks about that note —
+   * open it, go to its code — and not about the graph, whose options belong to
+   * the background it is drawn on.
+   */
+  function setNodeMenu(node, at) {
+    closeMenus();
+    nodeMenu.hidden = false;
+    menuNode = node;
+    hovered = node;
+    tip.hidden = true;
+    nodeMenu.textContent = '';
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.textContent = node.title;
+    nodeMenu.append(head);
+    for (const item of NODE_ITEMS) {
+      if (item.separator) {
+        nodeMenu.append(document.createElement('hr'));
+        continue;
+      }
+      if (item.located && !node.file) {
+        continue; // a note with no location has nowhere to go
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.textContent = item.label;
+      button.addEventListener('click', () => {
+        closeMenus();
+        vscode.postMessage({ type: 'note', command: item.command, id: node.id });
+      });
+      nodeMenu.append(button);
+    }
+    place(nodeMenu, at);
+    const first = nodeMenu.querySelector('button');
+    if (first) first.focus();
+  }
+
+  for (const menu of [options, nodeMenu]) {
+    menu.addEventListener('mousedown', (e) => e.stopPropagation());
+    menu.addEventListener('click', (e) => e.stopPropagation());
+  }
   window.addEventListener('mousedown', (e) => {
-    if (!options.hidden && e.target !== optionsButton && !optionsButton.contains(/** @type {Node} */ (e.target))) {
-      setMenu(false);
+    const open = [options, nodeMenu].filter((menu) => !menu.hidden);
+    if (open.length > 0 && !open.some((menu) => menu.contains(/** @type {Node} */ (e.target)))) {
+      closeMenus();
     }
   });
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !options.hidden) {
-      setMenu(false);
-      optionsButton.focus();
+    if (e.key === 'Escape' && (!options.hidden || !nodeMenu.hidden)) {
+      closeMenus();
       return;
     }
     if (e.target instanceof HTMLInputElement) {
@@ -999,6 +1111,10 @@
     if (typeof startup.linkTension === 'boolean') {
       linkTension = startup.linkTension;
       linkPull.checked = linkTension;
+    }
+    if (typeof startup.openOnDouble === 'boolean') {
+      openOnDouble = startup.openOnDouble;
+      openNote.checked = openOnDouble;
     }
     if (typeof startup.revealOnOpen === 'boolean') {
       revealOnOpen = startup.revealOnOpen;

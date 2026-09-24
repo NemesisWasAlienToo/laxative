@@ -4,6 +4,7 @@ import * as path from 'path';
 import { parse } from '../../core/schema';
 import { parseTags } from '../../core/tags';
 import { buildGraph } from '../../core/refs';
+import { located } from '../../core/display';
 
 /**
  * `docker/try-it.sh` writes a sample project and seeds it with notes, so the
@@ -37,7 +38,7 @@ describe('the try-it sandbox seed', () => {
       ['.laxative/ideas.json', '.laxative/notes.json'],
       'two files, so having several can be tried out'
     );
-    assert.strictEqual(notes.length, 8, 'all eight notes survive parsing');
+    assert.strictEqual(notes.length, 9, 'every seeded note survives parsing');
     const seededIds = seededFiles.flatMap((path) =>
       JSON.parse(files.get(path) as string).notes.map((n: { id: string }) => n.id)
     );
@@ -62,12 +63,20 @@ describe('the try-it sandbox seed', () => {
       p1x8dd02: 'while (attempt < 3)',
       w0b5neq7: 'async function load'
     };
+    // One of the seeded notes is deliberately about no line of code at all.
+    const anchored = notes.filter((note) => located(note));
     assert.deepStrictEqual(
-      notes.map((n) => n.id).sort(),
+      anchored.map((n) => n.id).sort(),
       Object.keys(anchoredTo).sort(),
-      'every seeded note is accounted for here'
+      'every anchored note is accounted for here'
     );
-    for (const note of notes) {
+    assert.strictEqual(
+      notes.length - anchored.length,
+      1,
+      'and one is there to show a note that points nowhere'
+    );
+    for (const note of anchored) {
+      assert.ok(located(note), `${note.id} is anchored to a line of code`);
       const source = files.get(note.file);
       assert.ok(source, `${note.file} is one of the seeded files`);
       const lines = (source as string).split('\n');

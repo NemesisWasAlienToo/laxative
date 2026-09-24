@@ -1,4 +1,5 @@
 import { Note, NoteStoreFile, STORE_VERSION } from './types';
+import { Located, located } from './display';
 import { parseTags } from './tags';
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -35,13 +36,23 @@ export function deriveTitle(body: string): string {
  * produce diffs that git can merge instead of conflicting.
  */
 export function sortNotes(notes: Note[]): Note[] {
-  return [...notes].sort(
-    (a, b) =>
+  return [...notes].sort((a, b) => {
+    // Notes with no location have nothing to be in the order of, so they go
+    // after the ones that do, in a stable order of their own.
+    if (!located(a) || !located(b)) {
+      return (
+        Number(located(b)) - Number(located(a)) ||
+        a.title.localeCompare(b.title) ||
+        a.id.localeCompare(b.id)
+      );
+    }
+    return (
       a.file.localeCompare(b.file) ||
       a.line - b.line ||
       a.character - b.character ||
       a.id.localeCompare(b.id)
-  );
+    );
+  });
 }
 
 /** Only the fields that belong on disk, in a fixed order, so diffs stay stable. */
@@ -50,9 +61,9 @@ function onDisk(note: Note): Note {
     id: note.id,
     title: note.title,
     body: note.body,
-    file: note.file,
-    line: note.line,
-    character: note.character,
+    // A note with no location carries no location fields at all, rather than
+    // an empty path and a line 0 that read as a real place.
+    ...(located(note) ? { file: note.file, line: note.line, character: note.character } : {}),
     tags: note.tags,
     createdAt: note.createdAt,
     updatedAt: note.updatedAt
@@ -95,6 +106,23 @@ function asPosition(value: unknown): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
 }
 
+/**
+ * Where a note points, if it points anywhere. There is no flag for that: a
+ * note that does not carry all three of file, line and character is about the
+ * workspace rather than about a line in it. A value that is there but nonsense
+ * is still repaired, so only a missing one means "nowhere".
+ */
+function locationOf(entry: Record<string, unknown>): Located | undefined {
+  const file = asString(entry.file).replace(/\\/g, '/');
+  if (!file || entry.line === undefined || entry.line === null) {
+    return undefined;
+  }
+  if (entry.character === undefined || entry.character === null) {
+    return undefined;
+  }
+  return { file, line: asPosition(entry.line), character: asPosition(entry.character) };
+}
+
 /** Tolerant parser: unknown/missing fields are repaired rather than thrown away. */
 export function parse(text: string): Note[] {
   if (text.trim() === '') {
@@ -113,10 +141,7 @@ export function parse(text: string): Note[] {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
-    const file = asString(entry.file).replace(/\\/g, '/');
-    if (!file) {
-      continue;
-    }
+    const at = locationOf(entry);
     let id = asString(entry.id);
     if (!id || seen.has(id)) {
       id = newId(seen);
@@ -128,9 +153,7 @@ export function parse(text: string): Note[] {
       id,
       body,
       title: asString(entry.title) || deriveTitle(body),
-      file,
-      line: asPosition(entry.line),
-      character: asPosition(entry.character),
+      ...(at ?? {}),
       tags: parseTags(body),
       createdAt: asString(entry.createdAt, now),
       updatedAt: asString(entry.updatedAt, now),

@@ -212,6 +212,14 @@ cat > "$SANDBOX/project/.laxative/ideas.json" <<'SAMPLE'
       ],
       "createdAt": "2026-09-01T09:00:00.000Z",
       "updatedAt": "2026-09-01T09:00:00.000Z"
+    },
+    {
+      "id": "loose001",
+      "title": "Ship a smaller default page size",
+      "body": "Ship a smaller default page size\n\nNot about any one line: the whole retry/caching story only pays off\nif a page fits in one round trip. Decide before the next release. #idea",
+      "tags": ["idea"],
+      "createdAt": "2026-02-02T09:00:00.000Z",
+      "updatedAt": "2026-02-02T09:00:00.000Z"
     }
   ]
 }
@@ -255,7 +263,19 @@ them there.
 6. **The Laxative view** in the activity bar - six notes over three files.
    Switch it to **Group by Hashtag**: `#bug` and `#perf/hot-path` have two
    notes each, and `load() is a stub` sits under *untagged*.
-7. **The Note Graph** tab in the bottom panel, next to Terminal:
+7. **A note about nothing in particular**: `ideas` holds one with no location -
+   press the **+** on the Notes view, or `Ctrl+Alt+N`, to write another
+   (the button beside it, with the speech bubble, is the one that attaches a
+   note to the cursor). They sit under *no location* in the list, and in the
+   graph they are grey.
+8. **The graph's options**: right-click the empty background for the
+   checkboxes and for laying the notes out again; right-*drag* still draws a
+   selection box. Untick *Double-click opens the note* and tick *Double-click
+   goes to the code* to browse the code without the reading panel.
+9. **A note's own menu**: right-click a node. The menu is headed by the note's
+   title and offers Open note, Go to code, Edit note, Copy reference and
+   Delete note - and the loose note from step 7 is offered no Go to code.
+10. **The Note Graph** tab in the bottom panel, next to Terminal:
    - three node colours, one per file;
    - *Race with the cache warmer* is the biggest node - it has four links;
    - solid arrows are `[[refs]]`, faint dashes join notes sharing a file or tag;
@@ -263,11 +283,11 @@ them there.
      everything stops moving in about a fifth of a second. Hold one still
      without letting go: everything settles around it rather than drifting;
    - drag one cluster off to a corner: it is left there, because moving a note
-     by hand switches off the pull towards the middle. **Tidy** puts the
-     automatic layout back;
-   - open **Options ▾**: untick *Show details on hover* if the hover card is
-     in the way, or tick *Go to code when opening a note* and double-click a
-     node - the code opens, and the note beside it;
+     by hand switches off the pull towards the middle. *Lay the notes out
+     again*, on that same menu, puts the automatic layout back;
+   - right-click the background: untick *Show details on hover* if the hover
+     card is in the way, or tick *Double-click goes to the code* and
+     double-click a node - the code opens, and the note beside it;
    - with a note open, its node is ringed; open another and the ring follows;
    - **right-drag** a box around a few notes (or Ctrl+click them), then drag one
      of them: the whole selection moves together. Escape clears it;

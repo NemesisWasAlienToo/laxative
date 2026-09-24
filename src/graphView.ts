@@ -5,6 +5,15 @@ import { Diagnostics } from './diagnostics';
 import { NotePanel } from './notePanel';
 import { NOTE_SCHEME } from './noteDocuments';
 
+/** What a note's context menu in the graph may ask for, and nothing else. */
+const NODE_COMMANDS = new Set([
+  'laxative.openNote',
+  'laxative.revealNote',
+  'laxative.editNote',
+  'laxative.copyReference',
+  'laxative.deleteNote'
+]);
+
 /**
  * The note graph, living in the bottom panel next to Terminal and Problems the
  * way GitLens's commit graph does, rather than taking an editor tab.
@@ -60,15 +69,17 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')]
     };
     view.webview.onDidReceiveMessage(
-      (msg: { type: string; id?: string; reveal?: boolean }) => {
+      (msg: { type: string; id?: string; reveal?: boolean; open?: boolean; command?: string }) => {
         if (msg.type === 'ready') {
           this.push();
         } else if (msg.type === 'painted') {
           this.diagnostics.record('graph', msg as Record<string, unknown>);
         } else if (msg.type === 'open' && msg.id) {
-          void this.open(msg.id, msg.reveal === true);
+          void this.open(msg.id, msg.reveal === true, msg.open !== false);
         } else if (msg.type === 'reveal' && msg.id) {
           void vscode.commands.executeCommand('laxative.revealNote', msg.id);
+        } else if (msg.type === 'note' && msg.id && msg.command && NODE_COMMANDS.has(msg.command)) {
+          void vscode.commands.executeCommand(msg.command, msg.id);
         }
       },
       null,
@@ -99,22 +110,21 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
 <div id="hud">
   <input id="filter" type="text" placeholder="Filter notes...">
   <input id="exclude" type="text" placeholder="Exclude..." title="Hide notes matching any of these terms">
-  <div class="menu-anchor">
-    <button id="optionsButton" type="button" aria-haspopup="true" aria-expanded="false"
-      aria-controls="options">Options <span aria-hidden="true">&#9662;</span></button>
-    <div id="options" role="menu" aria-label="Graph options" hidden>
-      <label role="menuitemcheckbox"><input id="showFiles" type="checkbox" checked> Link notes in the same file</label>
-      <label role="menuitemcheckbox"><input id="showTags" type="checkbox" checked> Link notes sharing a hashtag</label>
-      <label role="menuitemcheckbox" title="Off: linked notes stay wherever you put them. Links are still drawn, and Tidy still lays notes out by them."><input id="linkPull" type="checkbox" checked> Links pull notes together</label>
-      <label role="menuitemcheckbox"><input id="showTip" type="checkbox" checked> Show details on hover</label>
-      <hr>
-      <label role="menuitemcheckbox"><input id="openReveals" type="checkbox"> Go to code when opening a note</label>
-    </div>
-  </div>
-  <button id="tidy" type="button" title="Lay the notes out automatically again">Tidy</button>
   <span id="stats"></span>
 </div>
 <canvas id="canvas"></canvas>
+<div id="options" class="menu" role="menu" aria-label="Graph options" hidden>
+  <label role="menuitemcheckbox"><input id="showFiles" type="checkbox" checked> Link notes in the same file</label>
+  <label role="menuitemcheckbox"><input id="showTags" type="checkbox" checked> Link notes sharing a hashtag</label>
+  <label role="menuitemcheckbox" title="Off: linked notes stay wherever you put them. Links are still drawn, and Tidy still lays notes out by them."><input id="linkPull" type="checkbox" checked> Links pull notes together</label>
+  <label role="menuitemcheckbox"><input id="showTip" type="checkbox" checked> Show details on hover</label>
+  <hr>
+  <label role="menuitemcheckbox"><input id="openNote" type="checkbox" checked> Double-click opens the note</label>
+  <label role="menuitemcheckbox"><input id="openReveals" type="checkbox"> Double-click goes to the code</label>
+  <hr>
+  <button id="tidy" type="button" role="menuitem">Lay the notes out again</button>
+</div>
+<div id="nodeMenu" class="menu" role="menu" aria-label="Note" hidden></div>
 <div id="tip" hidden></div>
 <script nonce="${nonce}" src="${media('graph.js')}"></script>
 </body>
@@ -148,11 +158,13 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
    * "Go to code when opening" option is on: the code settles into its own
    * column before the reading panel opens beside it, as the Notes view does.
    */
-  private async open(id: string, reveal: boolean): Promise<void> {
+  private async open(id: string, reveal: boolean, open: boolean): Promise<void> {
     if (reveal) {
       await vscode.commands.executeCommand('laxative.revealNote', id);
     }
-    await vscode.commands.executeCommand('laxative.openNote', id);
+    if (open) {
+      await vscode.commands.executeCommand('laxative.openNote', id);
+    }
   }
 
   /** Brings the graph tab forward in the bottom panel. */

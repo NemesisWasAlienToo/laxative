@@ -12,6 +12,7 @@ const ROW_COMMANDS = new Set([
   'laxative.editNote',
   'laxative.filterByTag',
   'laxative.addNote',
+  'laxative.addLooseNote',
   'laxative.import'
 ]);
 

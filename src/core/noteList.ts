@@ -13,9 +13,10 @@ export interface ListNote {
   id: string;
   title: string;
   body: string;
-  file: string;
-  line: number;
-  character: number;
+  /** Absent for a note that points at no line of code; see `Note`. */
+  file?: string;
+  line?: number;
+  character?: number;
   tags: string[];
   store?: string;
 }
@@ -34,7 +35,7 @@ export interface ListRow {
 
 export interface ListGroup {
   id: string;
-  kind: 'file' | 'tag' | 'untagged' | 'store';
+  kind: 'file' | 'unlocated' | 'tag' | 'untagged' | 'store';
   label: string;
   description: string;
   /** The annotated file, for a file group, so it can be given that file's icon. */
@@ -61,8 +62,12 @@ export interface ListOptions {
 
 const TOOLTIP_LENGTH = 600;
 
+/** The group notes with no location are drawn under, whatever else is on. */
+const UNLOCATED_ID = 'nolocation';
+
 function tooltipOf(note: ListNote, showStore: boolean): string {
-  const where = showStore && note.store ? `${noteLocation(note)} · ${note.store}` : noteLocation(note);
+  const at = noteLocation(note) ?? 'Not attached to any line of code';
+  const where = showStore && note.store ? `${at} · ${note.store}` : at;
   const body = note.body.trim();
   const shown = body.length > TOOLTIP_LENGTH ? `${body.slice(0, TOOLTIP_LENGTH).trimEnd()}…` : body;
   return shown ? `${where}\n\n${shown}` : where;
@@ -162,8 +167,15 @@ export function buildList(notes: readonly ListNote[], options: ListOptions): Not
     }
   } else {
     const byFile = new Map<string, ListNote[]>();
+    // Notes about no line of code have no file to be grouped under, so they
+    // get a group of their own, after the files.
+    const unlocated: ListNote[] = [];
     for (const note of visible) {
-      push(byFile, note.file, note);
+      if (note.file === undefined) {
+        unlocated.push(note);
+      } else {
+        push(byFile, note.file, note);
+      }
     }
     for (const file of [...byFile.keys()].sort()) {
       const members = byFile.get(file) ?? [];
@@ -175,6 +187,15 @@ export function buildList(notes: readonly ListNote[], options: ListOptions): Not
         label: file.split('/').pop() ?? file,
         description: `${dir} · ${members.length}`.trim(),
         rows: rowsOf(`file:${file}`, members, false)
+      });
+    }
+    if (unlocated.length > 0) {
+      groups.push({
+        id: UNLOCATED_ID,
+        kind: 'unlocated',
+        label: 'no location',
+        description: String(unlocated.length),
+        rows: rowsOf(UNLOCATED_ID, unlocated, false)
       });
     }
   }

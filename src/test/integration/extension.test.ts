@@ -113,6 +113,7 @@ describe('Laxative extension', function () {
     assert.ok(keybindings, 'keybindings are contributed');
     const bound = new Map(keybindings.map((binding) => [binding.command, binding.key]));
     assert.strictEqual(bound.get('laxative.addNote'), 'ctrl+alt+m');
+    assert.strictEqual(bound.get('laxative.addLooseNote'), 'ctrl+alt+n');
     assert.strictEqual(bound.get('laxative.searchNotes'), 'ctrl+alt+shift+m');
     assert.strictEqual(bound.get('laxative.showGraph'), 'ctrl+alt+g');
     assert.strictEqual(
@@ -145,6 +146,53 @@ describe('Laxative extension', function () {
     ]) {
       assert.ok(commands.includes(name), `${name} should be registered`);
     }
+  });
+
+  it('marks the line a note is on, and only that line, after the line is copied', async () => {
+    await writeStore([makeNote()]);
+    // The title at the end of the line is off by default; both marks are the
+    // same live ranges, so this covers them together.
+    await vscode.workspace
+      .getConfiguration('laxative')
+      .update('showInlineTitle', true, vscode.ConfigurationTarget.Workspace);
+    const document = await vscode.workspace.openTextDocument(appUri());
+    const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
+    editor.selection = new vscode.Selection(1, 0, 1, 0);
+
+    const marks = async () =>
+      (await vscode.commands.executeCommand('laxative._marks')) as {
+        gutter: number[];
+        inline: number[];
+        draws: number;
+      };
+    const before = await waitFor(
+      async () => {
+        const drawn = await marks();
+        return drawn.gutter.length === 1 && drawn.inline.length === 1 ? drawn : undefined;
+      },
+      'the note to be marked in the editor'
+    );
+    assert.deepStrictEqual(before.gutter, [1], 'one note, one gutter icon');
+
+    // Duplicating the line copies the code, not the note: a decoration is a
+    // live range, and an edit at the mark's own position used to widen it over
+    // both lines, leaving an icon on the copy until the window was reloaded.
+    await vscode.commands.executeCommand('editor.action.copyLinesDownAction');
+    const after = await waitFor(
+      async () => {
+        const drawn = await marks();
+        return drawn.draws > before.draws ? drawn : undefined;
+      },
+      'the marks to be drawn again from the notes after the edit'
+    );
+    assert.deepStrictEqual(after.gutter, [1], 'still one icon, on the line the note is about');
+    assert.deepStrictEqual(after.inline, [1], 'and one title at the end of that line');
+
+    await vscode.commands.executeCommand('undo');
+    await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+    await vscode.workspace
+      .getConfiguration('laxative')
+      .update('showInlineTitle', undefined, vscode.ConfigurationTarget.Workspace);
   });
 
   it('shows a CodeLens on the annotated line without changing the source file', async () => {
@@ -701,6 +749,94 @@ describe('Laxative extension', function () {
     it('registers the storage configuration command', async () => {
       const commands = await vscode.commands.getCommands(true);
       assert.ok(commands.includes('laxative.configureStorage'));
+    });
+  });
+
+  describe('a note with no location', () => {
+    afterEach(async () => {
+      await writeStore([]);
+    });
+
+    it('is written without a location, listed apart, and goes nowhere', async () => {
+      await writeStore([makeNote({ id: 'anchor01', title: 'On a line' })]);
+      await vscode.commands.executeCommand('laxative.addLooseNote');
+
+      const made = await waitFor(async () => {
+        const notes = (await vscode.commands.executeCommand('laxative._notes')) as {
+          notes: { id: string; file?: string }[];
+        };
+        return notes.notes.find((n) => n.id !== 'anchor01');
+      }, 'the new note');
+      assert.strictEqual(made.file, undefined, 'it points at no line of code');
+
+      // Nothing for a location is written to the file either.
+      const onDisk = (await readStore()) as unknown as Record<string, unknown>[];
+      const written = onDisk.find((n) => n.id === made.id)!;
+      assert.ok(!('file' in written), `no file key: ${JSON.stringify(written)}`);
+      assert.ok(!('line' in written), 'and no line');
+
+      const rows = (
+        (await vscode.commands.executeCommand('laxative._notes')) as {
+          rows: { id: string; label: string; group?: string }[];
+        }
+      ).rows;
+      assert.ok(
+        rows.some((row) => row.label === 'no location'),
+        `the list gathers it apart: ${rows.map((r) => r.label).join(', ')}`
+      );
+
+      // Go to code has nowhere to go, and says so rather than throwing.
+      await vscode.commands.executeCommand('laxative.revealNote', made.id);
+      const still = (await vscode.commands.executeCommand('laxative._notes')) as {
+        notes: { id: string }[];
+      };
+      assert.strictEqual(still.notes.length, 2, 'and the note is still there');
+    });
+
+    it('is what the + adds, while adding one at the cursor is its own button', () => {
+      const contributes = vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON
+        ?.contributes as {
+        commands: { command: string; title: string; icon?: string }[];
+        menus: { 'view/title': { command: string; when: string; group: string }[] };
+      };
+      const order = (group: string) => Number(group.split('@')[1] ?? 0);
+      const title = contributes.menus['view/title']
+        .filter(
+          (item) => item.when.includes('laxative.notesView') && item.group.startsWith('navigation@')
+        )
+        .sort((a, b) => order(a.group) - order(b.group))
+        .map((item) => `${order(item.group)} ${item.command}`);
+      assert.deepStrictEqual(
+        title.filter((entry) => /add/i.test(entry)),
+        ['1 laxative.addLooseNote', '2 laxative.addNote'],
+        `the + comes first, the one at the cursor beside it: ${title.join(', ')}`
+      );
+      assert.ok(
+        !title.some((entry) => /^[12] /.test(entry) && !/add/i.test(entry)),
+        `and nothing else shares their places: ${title.join(', ')}`
+      );
+      const icons = new Map(contributes.commands.map((c) => [c.command, c.icon]));
+      assert.strictEqual(icons.get('laxative.addLooseNote'), '$(add)', 'the + is the plain note');
+      assert.notStrictEqual(
+        icons.get('laxative.addNote'),
+        '$(add)',
+        'and the one at the cursor has an icon of its own'
+      );
+    });
+
+    it('is not what adding one at the cursor does when there is no cursor', async () => {
+      await writeStore([makeNote({ id: 'anchor02', title: 'On a line' })]);
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await vscode.commands.executeCommand('laxative.addNote');
+      await settle();
+      const notes = (await vscode.commands.executeCommand('laxative._notes')) as {
+        notes: { id: string }[];
+      };
+      assert.deepStrictEqual(
+        notes.notes.map((n) => n.id),
+        ['anchor02'],
+        'with no editor it asks for one rather than writing a note that points nowhere'
+      );
     });
   });
 

@@ -17,7 +17,8 @@
 export interface Searchable {
   title: string;
   body: string;
-  file: string;
+  /** Absent for a note that points at no line of code. */
+  file?: string;
   tags: string[];
 }
 
@@ -49,7 +50,7 @@ export function haystack(note: Searchable): string {
   if (known !== undefined) {
     return known;
   }
-  const text = [note.title, note.body, note.file, ...(note.tags ?? []).map((tag) => `#${tag}`)]
+  const text = [note.title, note.body, note.file ?? '', ...(note.tags ?? []).map((tag) => `#${tag}`)]
     .join('\n')
     .toLowerCase();
   cache.set(note as object, text);
