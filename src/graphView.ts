@@ -53,6 +53,11 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
     });
   }
 
+  /** Opens or closes groups in the graph, the way its menu does. For the tests. */
+  groups(action: { action: string; path?: string; mode?: string }): void {
+    void this.view?.webview.postMessage({ type: 'groups', ...action });
+  }
+
   constructor(
     private readonly store: NoteStore,
     private readonly extensionUri: vscode.Uri,
@@ -119,6 +124,10 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
           void this.open(msg.id, msg.reveal === true, msg.open !== false);
         } else if (msg.type === 'reveal' && msg.id) {
           void vscode.commands.executeCommand('laxative.revealNote', msg.id);
+        } else if (msg.type === 'group' && Array.isArray((msg as { ids?: unknown }).ids)) {
+          void vscode.commands.executeCommand('laxative.moveToGroup', {
+            ids: (msg as unknown as { ids: unknown[] }).ids.map(String)
+          });
         } else if (msg.type === 'note' && msg.id && msg.command && NODE_COMMANDS.has(msg.command)) {
           void vscode.commands.executeCommand(msg.command, msg.id);
         }
@@ -155,15 +164,21 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
 </div>
 <canvas id="canvas"></canvas>
 <div id="options" class="menu" role="menu" aria-label="Graph options" hidden>
-  <label role="menuitemcheckbox"><input id="showFiles" type="checkbox" checked> Link notes in the same file</label>
-  <label role="menuitemcheckbox"><input id="showTags" type="checkbox" checked> Link notes sharing a hashtag</label>
-  <label role="menuitemcheckbox" title="Off: linked notes stay wherever you put them. Links are still drawn, and Tidy still lays notes out by them."><input id="linkPull" type="checkbox" checked> Links pull notes together</label>
-  <label role="menuitemcheckbox"><input id="showTip" type="checkbox" checked> Show details on hover</label>
+  <div id="groupHead" hidden></div>
+  <label role="menuitemcheckbox" title="Notes ending their first line in @name are grouped by it; @a/b is group b inside group a"><input id="groupByMark" type="checkbox" checked><span class="mark"></span>Group by @group</label>
+  <label role="menuitemcheckbox" title="Notes grouped by the folders and file they are on"><input id="groupByPath" type="checkbox"><span class="mark"></span>Group by folder and file</label>
+  <button id="expandAll" type="button" role="menuitem"><span class="mark"></span>Expand all groups</button>
+  <button id="collapseAll" type="button" role="menuitem"><span class="mark"></span>Collapse all groups</button>
   <hr>
-  <label role="menuitemcheckbox"><input id="openNote" type="checkbox" checked> Double-click opens the note</label>
-  <label role="menuitemcheckbox"><input id="openReveals" type="checkbox"> Double-click goes to the code</label>
+  <label role="menuitemcheckbox"><input id="showFiles" type="checkbox" checked><span class="mark"></span>Link notes in the same file</label>
+  <label role="menuitemcheckbox"><input id="showTags" type="checkbox" checked><span class="mark"></span>Link notes sharing a hashtag</label>
+  <label role="menuitemcheckbox" title="Off: linked notes stay wherever you put them. Links are still drawn, and Tidy still lays notes out by them."><input id="linkPull" type="checkbox" checked><span class="mark"></span>Links pull notes together</label>
+  <label role="menuitemcheckbox"><input id="showTip" type="checkbox" checked><span class="mark"></span>Show details on hover</label>
   <hr>
-  <button id="tidy" type="button" role="menuitem">Lay the notes out again</button>
+  <label role="menuitemcheckbox"><input id="openNote" type="checkbox" checked><span class="mark"></span>Double-click opens the note</label>
+  <label role="menuitemcheckbox"><input id="openReveals" type="checkbox"><span class="mark"></span>Double-click goes to the code</label>
+  <hr>
+  <button id="tidy" type="button" role="menuitem"><span class="mark"></span>Lay the notes out again</button>
 </div>
 <div id="nodeMenu" class="menu" role="menu" aria-label="Note" hidden></div>
 <div id="tip" hidden></div>
@@ -192,6 +207,7 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
         character: n.character,
         lost: n.lost === true,
         tags: n.tags,
+        group: n.group ?? null,
         excerpt: n.body.slice(0, 240)
       })),
       edges: graph.edges,

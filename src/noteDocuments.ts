@@ -3,7 +3,8 @@ import { NoteStore } from './store';
 import { Note } from './core/types';
 import { noteAnchor } from './core/display';
 import { tagIndex } from './core/tags';
-import { refPrefix, slugForTitle, tagPrefix } from './core/editing';
+import { groupPrefix, refPrefix, slugForTitle, tagPrefix } from './core/editing';
+import { groupPath } from './core/groups';
 
 export const NOTE_SCHEME = 'laxative';
 
@@ -28,7 +29,8 @@ export class NoteDocuments implements vscode.FileSystemProvider, vscode.Disposab
         { scheme: NOTE_SCHEME },
         new NoteCompletions(store),
         '[',
-        '#'
+        '#',
+        '@'
       ),
       // A note opened and closed without typing anything leaves nothing behind.
       // Tab events are used rather than onDidCloseTextDocument, which VS Code
@@ -255,6 +257,29 @@ class NoteCompletions implements vscode.CompletionItemProvider {
           item.range = range;
           return item;
         });
+    }
+
+    // A group is only ever at the end of the first line, so it is only offered
+    // there; an `@` anywhere else is just text.
+    const firstLine = Array.from({ length: document.lineCount }, (_, i) => i).find(
+      (i) => document.lineAt(i).text.trim().length > 0
+    );
+    const group = position.line === firstLine ? groupPrefix(upToCursor) : undefined;
+    if (group) {
+      const range = new vscode.Range(position.line, group.start, position.line, position.character);
+      const counts = new Map<string, number>();
+      for (const note of this.store.all()) {
+        for (const level of note.group ? groupPath(note.group) : []) {
+          counts.set(level, (counts.get(level) ?? 0) + 1);
+        }
+      }
+      return [...counts].map(([name, count]) => {
+        const item = new vscode.CompletionItem(`@${name}`, vscode.CompletionItemKind.Folder);
+        item.detail = `group · ${count} note${count === 1 ? '' : 's'}`;
+        item.insertText = `@${name}`;
+        item.range = range;
+        return item;
+      });
     }
 
     const tag = tagPrefix(upToCursor);

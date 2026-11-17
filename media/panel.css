@@ -103,6 +103,14 @@ body {
   text-decoration: none;
 }
 .chip:hover { text-decoration: none; filter: brightness(1.15); }
+/* The group: outlined rather than filled, so it never reads as one more tag. */
+.chip.group {
+  background: none;
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-focusBorder, currentColor);
+}
+.chip.group:hover { filter: none; }
+.rendered img { max-width: 100%; height: auto; }
 
 a { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: none; }
 a:hover { text-decoration: underline; }

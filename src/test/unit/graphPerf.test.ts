@@ -22,6 +22,9 @@ const HTML = `
   <canvas id="canvas"></canvas>
   <div id="tip" hidden></div>
   <div id="options" hidden>
+    <div id="groupHead" hidden></div>
+    <input id="groupByMark" type="checkbox" checked><input id="groupByPath" type="checkbox">
+    <button id="expandAll"></button><button id="collapseAll"></button>
     <input id="showFiles" type="checkbox" checked><input id="showTags" type="checkbox" checked>
     <input id="linkPull" type="checkbox" checked><input id="showTip" type="checkbox" checked>
     <input id="openNote" type="checkbox" checked><input id="openReveals" type="checkbox">
@@ -261,5 +264,101 @@ describe('graph with 6,000 notes', function () {
       assert.ok(moved < 40, `${gap}px apart, the other note moved ${moved.toFixed(0)} px`);
     }
     dom.window.close();
+  });
+
+  it('opens and closes groups quickly, and drags inside an open one smoothly', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><body>${HTML}</body></html>`, {
+      runScripts: 'dangerously',
+      pretendToBeVisual: true
+    });
+    const window = dom.window as any;
+    const state = { current: undefined as any };
+    const posted: any[] = [];
+    window.acquireVsCodeApi = () => ({
+      postMessage: (m: unknown) => posted.push(m),
+      getState: () => state.current,
+      setState: (value: unknown) => (state.current = value)
+    });
+    const context: Record<string, unknown> = { measureText: () => ({ width: 10 }) };
+    for (const name of [
+      'clearRect', 'save', 'restore', 'translate', 'scale', 'beginPath', 'arc', 'fill', 'stroke',
+      'moveTo', 'lineTo', 'closePath', 'setLineDash', 'fillText', 'setTransform', 'fillRect', 'strokeRect'
+    ]) {
+      context[name] = () => undefined;
+    }
+    window.HTMLCanvasElement.prototype.getContext = () => context;
+    Object.defineProperty(window.HTMLCanvasElement.prototype, 'clientWidth', { get: () => 1200 });
+    Object.defineProperty(window.HTMLCanvasElement.prototype, 'clientHeight', { get: () => 800 });
+    const frames: number[] = [];
+    const raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback: (t: number) => void) =>
+      raf((t: number) => {
+        const started = performance.now();
+        callback(t);
+        frames.push(performance.now() - started);
+      });
+    window.eval(fs.readFileSync(path.join(MEDIA, 'graph.js'), 'utf8'));
+    const send = (message: unknown) =>
+      window.dispatchEvent(new window.MessageEvent('message', { data: message }));
+    const settle = async () => {
+      let seen = -1;
+      for (let wait = 0; seen !== frames.length && wait < 100; wait++) {
+        seen = frames.length;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    };
+    const painted = () => posted.filter((m) => m.type === 'painted').at(-1);
+
+    // The same notes, grouped the way try-it --big groups them: @big/mod0..29.
+    const graph = bigGraph();
+    graph.nodes.forEach((node: any, n: number) => (node.group = `big/mod${n % 30}`));
+    const timed = (what: string, run: () => void) => {
+      const started = performance.now();
+      run();
+      const ms = performance.now() - started;
+      console.log(`      ${what.padEnd(36)} ${ms.toFixed(0)} ms`);
+      return ms;
+    };
+    const load = timed('first layout, groups closed', () => send(graph));
+    await settle();
+    assert.strictEqual(painted().shown, 1, 'one bubble: @big, holding all 6,000');
+
+    const open = timed('open @big (30 groups)', () => send({ type: 'groups', action: 'expand', path: 'big' }));
+    await settle();
+    assert.strictEqual(painted().shown, 30);
+    const all = timed('expand all (6,000 notes)', () => send({ type: 'groups', action: 'expandAll' }));
+    await settle();
+    assert.strictEqual(painted().shown, NOTES);
+    const close = timed('collapse all', () => send({ type: 'groups', action: 'collapseAll' }));
+    await settle();
+    assert.strictEqual(painted().shown, 1);
+
+    // Open @big and one part, and drag a note inside the open part.
+    send({ type: 'groups', action: 'expand', path: 'big' });
+    send({ type: 'groups', action: 'expand', path: 'big/mod0' });
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 400)); // positions are saved
+    const { positions, view } = state.current;
+    const [x, y] = positions.n0;
+    const at = (wx: number, wy: number) => ({ clientX: wx * view.scale + view.x, clientY: wy * view.scale + view.y, bubbles: true });
+    const canvas = window.document.getElementById('canvas');
+    frames.length = 0;
+    canvas.dispatchEvent(new window.MouseEvent('mousedown', at(x, y)));
+    for (let i = 1; i <= 30; i++) {
+      window.dispatchEvent(new window.MouseEvent('mousemove', at(x + i * 2, y)));
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    const held = [...frames].sort((a, b) => a - b);
+    window.dispatchEvent(new window.MouseEvent('mouseup', at(x + 60, y)));
+    await settle();
+    const p95 = held[Math.floor(held.length * 0.95)] ?? 0;
+    console.log(`      drag in an open group: 95th frame    ${p95.toFixed(0)} ms (${held.length} frames)`);
+    dom.window.close();
+
+    assert.ok(load < 3000, `first layout took ${load.toFixed(0)} ms`);
+    for (const [what, ms] of [['open', open], ['expand all', all], ['collapse all', close]] as const) {
+      assert.ok(ms < 3000, `${what} took ${ms.toFixed(0)} ms`);
+    }
+    assert.ok(p95 < 25, `95th percentile frame while dragging: ${p95.toFixed(0)} ms`);
   });
 });

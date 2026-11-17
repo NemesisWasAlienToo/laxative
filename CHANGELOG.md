@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Groups.** End a note's first line with `@group`, or `@group/part` for a
+  group inside a group, and it is in that group (`\@` is a plain @). Tags stay
+  tags. In the graph, a group can be closed into one bubble showing how many
+  notes it holds, with one thicker link standing for all the links in or out. Double-click a bubble to open it where it is;
+  double-click inside its outline to close it again. Drag a bubble, or an open
+  group by its name, to move the whole group. Right-click for Expand/Collapse
+  all groups, and to expand or collapse one. Groups start closed. Groups can be by folder and file instead.
+  Which groups are open is kept for each person, never in the notes.
+- **Move to group...** on a note, or on several selected in the graph, picks a
+  group or makes a new one, and writes it at the end of the first line. Typing
+  `@` there offers the groups already used.
+- **Images in notes.** `![](assets/x.png)` is looked for in `.laxative/` first,
+  then in the project (`docs/diagram.png`). Paste or drop an image into a note
+  being edited, or run **Insert Image...**: it is saved in
+  `.laxative/assets/` and linked for you. Images show in the reading panel and
+  the hover card. (Pasting needs a VS Code with the paste API; dropping works
+  everywhere.)
+- **The graph's menu ticks options** the way VS Code's own menus do, instead of
+  showing checkboxes.
+
 - **Notes follow their code.** Each note keeps a short snippet: its line and
   the one either side, trimmed, at most 160 characters each. When a file
   changes, in the editor or on disk (a `git pull`, a patch, a terminal), the

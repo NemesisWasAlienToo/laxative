@@ -33,6 +33,11 @@ export interface Note {
   lost?: boolean;
   tags: string[];
   /**
+   * The `@group/sub` at the end of the first line, lower-cased. Read from the
+   * body like the tags, and never written to disk on its own.
+   */
+  group?: string;
+  /**
    * Which note file this note was read from. Assigned when the store loads a
    * file and never written to disk: the file a note is in is where it is, not
    * something it carries.

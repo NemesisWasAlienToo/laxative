@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { Note } from './core/types';
 import { deriveTitle, newId, parse, serialize, sortNotes } from './core/schema';
 import { parseTags } from './core/tags';
+import { parseGroup } from './core/groups';
 import { Placement, Snippet, sameSnippet } from './core/anchoring';
 import { located } from './core/display';
 import { timed, timedAsync } from './timing';
@@ -640,6 +641,7 @@ export class NoteStore implements vscode.Disposable {
           }
         : {}),
       tags: parseTags(input.body),
+      ...(parseGroup(input.body) ? { group: parseGroup(input.body) } : {}),
       store: file.name,
       createdAt: now,
       updatedAt: now
@@ -661,6 +663,12 @@ export class NoteStore implements vscode.Disposable {
     Object.assign(note, patch);
     if (patch.body !== undefined) {
       note.tags = parseTags(patch.body);
+      const group = parseGroup(patch.body);
+      if (group) {
+        note.group = group;
+      } else {
+        delete note.group;
+      }
       if (patch.title === undefined) {
         note.title = deriveTitle(patch.body);
       }
@@ -668,6 +676,37 @@ export class NoteStore implements vscode.Disposable {
     note.updatedAt = new Date().toISOString();
     await this.persist(file);
     return note;
+  }
+
+  /**
+   * New bodies for many notes at once, each note file written once rather than
+   * once per note: moving a few hundred notes into a group is one write.
+   */
+  async updateBodies(changes: readonly { id: string; body: string }[]): Promise<number> {
+    const touched = new Set<NoteFile>();
+    const now = new Date().toISOString();
+    for (const { id, body } of changes) {
+      const file = this.fileOf(id);
+      const note = file?.notes.find((n) => n.id === id);
+      if (!file || !note || note.body === body) {
+        continue;
+      }
+      note.body = body;
+      note.tags = parseTags(body);
+      note.title = deriveTitle(body);
+      const group = parseGroup(body);
+      if (group) {
+        note.group = group;
+      } else {
+        delete note.group;
+      }
+      note.updatedAt = now;
+      touched.add(file);
+    }
+    for (const file of touched) {
+      await this.persist(file);
+    }
+    return touched.size === 0 ? 0 : changes.length;
   }
 
   async remove(id: string): Promise<boolean> {

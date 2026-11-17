@@ -6,6 +6,7 @@
 #   ./docker/try-it.sh          real VS Code over noVNC -> http://localhost:8443/vnc.html
 #   ./docker/try-it.sh --web    code-server in the browser -> http://localhost:8443
 #   ./docker/try-it.sh --big    also 600 files and 6,000 notes, a big project
+#   ./docker/try-it.sh --groups also 45 notes in groups within groups, and images
 #   PORT=9000 ./docker/try-it.sh
 #
 # The default is real desktop VS Code. code-server serves webviews through a
@@ -18,11 +19,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${PORT:-8443}"
 MODE="desktop"
 BIG=""
+WITH_GROUPS=""
 for arg in "$@"; do
   case "$arg" in
     --web) MODE="web" ;;
     --big) BIG=1 ;;
-    *) echo "unknown option: $arg (use --web and/or --big)" >&2; exit 1 ;;
+    --groups) WITH_GROUPS=1 ;;
+    *) echo "unknown option: $arg (use --web, --big and/or --groups)" >&2; exit 1 ;;
   esac
 done
 
@@ -332,6 +335,59 @@ if [ -n "$BIG" ]; then
     -v "$SANDBOX/project:/project" \
     -v "$ROOT/docker/seed-big.mjs:/seed-big.mjs:ro" \
     --entrypoint node laxative-test /seed-big.mjs /project
+fi
+
+if [ -n "$WITH_GROUPS" ]; then
+  echo "Seeding notes in groups, and images..."
+  docker build -q -f "$ROOT/docker/Dockerfile" -t laxative-test "$ROOT" >/dev/null
+  docker run --rm -u "$(id -u):$(id -g)" \
+    -v "$SANDBOX/project:/project" \
+    -v "$ROOT/docker/seed-groups.mjs:/seed-groups.mjs:ro" \
+    --entrypoint node laxative-test /seed-groups.mjs /project
+  cat > "$SANDBOX/project/GROUPS.md" <<'GUIDE'
+# Trying groups
+
+`.laxative/system.json` holds 45 notes in groups within groups:
+`@api` (auth, billing, search, gateway), `@storage` (cache, db, queue),
+`@frontend` (ui, state, routing) and `@infra` (deploy, monitoring), with links
+running from one area to another.
+
+A note's group is the `@name` at the end of its first line, `@api/auth` being
+part `auth` of area `api`. Tags stay tags.
+
+## In the Note Graph (bottom panel)
+
+1. Right-click the background: **Expand all groups** / **Collapse all groups**.
+   Collapse them: four bubbles (plus a few loose notes), each showing how many
+   notes it holds, with thick links between them labelled with how many links
+   each one stands for.
+2. **Double-click** a bubble: it opens where it is. Its parts show as smaller
+   bubbles inside a dashed outline. Double-click inside the outline (or on its
+   name) to close it again.
+3. **Drag a bubble** somewhere with room, then open it there. Grab an open
+   group by its **name** on the outline to move the whole group.
+4. Right-click a bubble, or a note inside an open group: expand, expand
+   everything inside, collapse the group it is in.
+5. Right-click a note: **Move to group...** picks a group or makes a new one
+   (type `ops/oncall`). Right-drag a box round a few notes first to move them
+   all at once. The note's first line changes to end in the new `@group`.
+6. Type in the filter box with groups closed: bubbles show `3/5`, how many of
+   their notes match.
+7. Right-click the background: tick **Group by folder and file** instead,
+   then collapse all: the same notes, grouped by `src/api/auth.ts` and so on.
+   It is one or the other.
+
+## In a note
+
+- Open *Architecture at a glance*: one image from `.laxative/assets/`, one
+  from `docs/` in the project.
+- Edit a note and paste an image (or drop one from the Explorer): it is saved
+  in `.laxative/assets/` and the link written for you.
+- *Send the on-call rota to ops@oncall* ends in `\@oncall`: escaped, so not a
+  group. Edit it, delete the backslash, save: it moves into `@oncall`.
+- Type `@` at the end of a first line: the groups already used are offered.
+- The reading panel shows the group as an outlined chip next to the tags.
+GUIDE
 fi
 
 git -C "$SANDBOX/project" init -q

@@ -2,6 +2,7 @@ import { Note, NoteStoreFile, STORE_VERSION } from './types';
 import { Located, located } from './display';
 import { parseTags } from './tags';
 import { Snippet } from './anchoring';
+import { parseGroup, withoutGroup } from './groups';
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -18,7 +19,11 @@ export function newId(existing: ReadonlySet<string> = new Set()): string {
   throw new Error('could not allocate a unique note id');
 }
 
-/** First non-empty markdown line, stripped of leading `#`/list markers. */
+/**
+ * First non-empty markdown line, stripped of leading `#`/list markers and of
+ * the `@group` at its end, which is shown on its own rather than in the name.
+ * `\@` and `\#` read as the plain symbols they show as.
+ */
 export function deriveTitle(body: string): string {
   const line = body
     .split('\n')
@@ -27,7 +32,11 @@ export function deriveTitle(body: string): string {
   if (!line) {
     return 'Untitled note';
   }
-  const cleaned = line.replace(/^#{1,6}\s*/, '').replace(/^[-*+]\s+/, '').trim();
+  const cleaned = withoutGroup(line)
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^[-*+]\s+/, '')
+    .replace(/\\([@#])/g, '$1')
+    .trim();
   const title = cleaned.length > 0 ? cleaned : 'Untitled note';
   return title.length > 120 ? title.slice(0, 117) + '...' : title;
 }
@@ -172,13 +181,17 @@ export function parse(text: string): Note[] {
     seen.add(id);
     const body = asString(entry.body);
     const now = new Date().toISOString();
+    const group = parseGroup(body);
     notes.push({
       id,
       body,
-      title: asString(entry.title) || deriveTitle(body),
+      // A note in a group has the group at the end of its first line, which a
+      // title stored before groups existed still carries: worked out again.
+      title: (group ? '' : asString(entry.title)) || deriveTitle(body),
       ...(at ?? {}),
       ...(snippet ? { snippet } : {}),
       tags: parseTags(body),
+      ...(group ? { group } : {}),
       createdAt: asString(entry.createdAt, now),
       updatedAt: asString(entry.updatedAt, now),
       // Only an export carries this; it is what puts the notes back in the

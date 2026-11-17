@@ -75,7 +75,38 @@ body {
   color: var(--vscode-menu-selectionForeground, inherit);
   background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
 }
-.menu input { margin: 0; }
+/* Checkable items look like VS Code's own menus: a tick in a column on the
+   left when on, nothing when off. The real checkbox is still there, for
+   keyboard and screen readers, just not drawn. */
+.menu input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+.menu .mark {
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+  position: relative;
+  margin-right: 0.15rem;
+}
+.menu input:checked + .mark::before {
+  content: '';
+  position: absolute;
+  left: 0.3rem;
+  top: 0.08rem;
+  width: 0.28rem;
+  height: 0.58rem;
+  border: solid currentColor;
+  border-width: 0 0.11rem 0.11rem 0;
+  transform: rotate(45deg);
+}
+.menu label, .menu button { gap: 0.35rem; }
+#groupHead { display: flex; flex-direction: column; }
+#groupHead[hidden] { display: none; }
 /* Which note the menu is about, so an item is never ambiguous. */
 .menu .head {
   max-width: 22rem;
@@ -95,6 +126,7 @@ body {
 #stats { font-size: 0.85em; opacity: 0.6; margin-left: auto; }
 #canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 #canvas.dragging { cursor: grabbing; }
+#canvas.handle { cursor: move; }
 #tip {
   position: absolute;
   z-index: 10;

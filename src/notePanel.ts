@@ -4,6 +4,8 @@ import { Note } from './core/types';
 import { deriveTitle } from './core/schema';
 import { parseTags } from './core/tags';
 import { renderHtml } from './markdown';
+import { parseGroup, setGroup } from './core/groups';
+import { resolveImage } from './assets';
 import { NOTE_SCHEME } from './noteDocuments';
 import { Diagnostics } from './diagnostics';
 
@@ -124,7 +126,12 @@ export class NotePanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
+        // The project too, for the images notes show: from `.laxative/assets/`
+        // or anywhere else in it.
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, 'media'),
+          ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri)
+        ]
       }
     );
     NotePanel.current = new NotePanel(panel, store, extensionUri, noteId, diagnostics);
@@ -142,7 +149,9 @@ export class NotePanel {
       "default-src 'none'",
       `style-src ${this.panel.webview.cspSource}`,
       `script-src 'nonce-${nonce}'`,
-      `font-src ${this.panel.webview.cspSource}`
+      `font-src ${this.panel.webview.cspSource}`,
+      // Images from the project and `.laxative/`, the web, and inline ones.
+      `img-src ${this.panel.webview.cspSource} https: data:`
     ].join('; ');
     return `<!DOCTYPE html>
 <html lang="en">
@@ -170,11 +179,17 @@ export class NotePanel {
     const all = this.store.all();
     const body = this.bodyFor(note);
     const title = deriveTitle(body);
+    const group = parseGroup(body);
     this.panel.title = title;
+    const webview = this.panel.webview;
     void this.panel.webview.postMessage({
       type: 'render',
       note: { id: note.id, title, file: note.file, line: note.line },
-      html: renderHtml(body, all),
+      // The group is shown as a chip, so not again as text in the first line.
+      html: renderHtml(group ? setGroup(body, undefined) : body, all, (src) => {
+        const file = resolveImage(src);
+        return file ? webview.asWebviewUri(file).toString() : undefined;
+      }),
       empty: body.trim() === '',
       meta: {
         file: note.file,
@@ -182,7 +197,8 @@ export class NotePanel {
         character: note.character === undefined ? undefined : note.character + 1,
         lost: note.lost === true,
         updatedAt: note.updatedAt,
-        tags: parseTags(body)
+        tags: parseTags(body),
+        group
       }
     });
   }
@@ -194,6 +210,9 @@ export class NotePanel {
         return;
       case 'rendered':
         this.diagnostics.record('notePanel', msg as Record<string, unknown>);
+        return;
+      case 'images':
+        this.diagnostics.record('noteImages', msg as Record<string, unknown>);
         return;
       case 'edit':
         await vscode.commands.executeCommand('laxative.editNote', this.noteId);

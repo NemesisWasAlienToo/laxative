@@ -119,15 +119,15 @@ The list, the graph, the hover and the reading panel always show the live title.
 ## How a note is anchored
 
 A note stores the file, the **line** and the **character** the cursor was on
-when you made it, and nothing else about your code — no copy of the annotated
-line ends up in the notes file. Revealing a note puts the cursor back on that
-exact line and column (clamped if the line has since become shorter).
+when you made it, plus a short **snippet**: that line and the one either side,
+trimmed, at most 160 characters each. Revealing a note puts the cursor back on
+that exact line and column.
 
-This means notes are pinned to a position: if you insert lines above one, it
-stays on its old line number rather than following the code. Making notes chase
-their code would mean storing a snippet of the anchored line to search for,
-which puts a copy of your source into the notes file — a trade-off this
-deliberately does not make.
+When a file changes — in the editor, or on disk through a `git pull`, a patch
+or a terminal — the note is moved to wherever its snippet is now. Only changed
+files are checked, and every file once at startup. When the code is gone, the
+note says **code not found** instead of showing a wrong line, and keeps its old
+place in case the code comes back.
 
 ## Hashtags vs. markdown
 
@@ -148,6 +148,28 @@ the following are **not** tags:
 Everything else — `#perf`, `#tech-debt`, `#perf/hot-path` — is a tag. Tags are
 lower-cased, and they are always derived from the note body, so the stored file
 can never drift out of sync with what you wrote.
+
+## Groups
+
+End a note's first line with `@name` and the note is in group `name`;
+`@api/auth` is part `auth` of group `api`. A note is in one group or none, and
+tags stay free for filtering. `\@` is a plain @ (it shows as `@`), and a name
+holds only letters, digits, `-`, `_` and `/`, so `mail a@b.com` is not a group.
+
+```
+Token refresh races the logout @api/auth
+```
+
+In the graph a group can be closed into one bubble and opened again where it
+is. **Move to group...** writes the `@name` for you. Which groups are open is
+kept for each person, never in the notes.
+
+## Images
+
+`![](assets/flow.png)` is looked for in `.laxative/` first, then in the project
+(`![](docs/diagram.png)`); a leading `/` means the project root only. Paste or
+drop an image into a note being edited, or run **Insert Image...**, and it is
+saved in `.laxative/assets/` with the link written for you.
 
 ## Where notes are stored
 
@@ -231,7 +253,7 @@ All are under the **Laxative:** prefix in the command palette.
 `Clear Hashtag Filter` · `Show Note Graph` · `Configure Storage...` ·
 `Select Note Files...` · `Add Note File...` · `Rename Note File...` ·
 `Delete Note File...` ·
-`Move Note to Another File...` ·
+`Move Note to Another File...` · `Move to Group...` · `Insert Image...` ·
 `Export Notes...` · `Import Notes...` · `Open Notes Store File` ·
 `Show Rendering Diagnostics` · `Refresh Notes`
 
@@ -271,6 +293,7 @@ a scratch dir inside the container. Downloaded VS Code builds are cached in the
 ./docker/try-it.sh          # real VS Code -> http://localhost:8443/vnc.html
 ./docker/try-it.sh --web    # code-server  -> http://localhost:8443
 ./docker/try-it.sh --big    # plus 600 files and 6,000 notes, to try a big project
+./docker/try-it.sh --groups # plus 45 notes in groups within groups, and images (see GROUPS.md in it)
 ```
 
 The default runs the **real desktop VS Code build** — the same one the tests use

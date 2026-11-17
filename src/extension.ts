@@ -22,6 +22,53 @@ import { tagIndex } from './core/tags';
 import { AnchorTracker } from './tracking';
 import { snapshotTimings } from './timing';
 import { Snippet, snippetAt } from './core/anchoring';
+import { allGroups, normalizeGroup, setGroup } from './core/groups';
+import { insertImage, registerImageInput } from './assets';
+
+/**
+ * Asks which group to put notes in: the groups already used, a new one typed
+ * into the box, or none. Undefined when dismissed; '' for no group.
+ */
+async function pickGroup(all: readonly Note[], notes: readonly Note[]): Promise<string | undefined> {
+  type Item = vscode.QuickPickItem & { group: string };
+  const counts = new Map<string, number>();
+  for (const note of all) {
+    for (const level of note.group ? allGroups([note]) : []) {
+      counts.set(level, (counts.get(level) ?? 0) + 1);
+    }
+  }
+  const current = new Set(notes.map((note) => note.group ?? ''));
+  const existing: Item[] = allGroups(all).map((group) => ({
+    label: `@${group}`,
+    description: `${counts.get(group)} note${counts.get(group) === 1 ? '' : 's'}${
+      current.size === 1 && current.has(group) ? ' · current' : ''
+    }`,
+    group
+  }));
+  const none: Item[] = notes.some((note) => note.group)
+    ? [{ label: '$(close) No group', description: 'Take the @group off the first line', group: '' }]
+    : [];
+  const pick = vscode.window.createQuickPick<Item>();
+  pick.title = notes.length === 1 ? `Group for "${notes[0].title}"` : `Group for ${notes.length} notes`;
+  pick.placeholder = 'Pick a group, or type a new one (use / for a group inside a group)';
+  const refresh = () => {
+    const typed = normalizeGroup(pick.value);
+    const fresh: Item[] =
+      typed && !existing.some((item) => item.group === typed)
+        ? [{ label: `$(add) @${typed}`, description: 'New group', group: typed, alwaysShow: true }]
+        : [];
+    pick.items = [...fresh, ...existing, ...none];
+  };
+  refresh();
+  pick.onDidChangeValue(refresh);
+  const chosen = await new Promise<string | undefined>((done) => {
+    pick.onDidAccept(() => done(pick.selectedItems[0]?.group));
+    pick.onDidHide(() => done(undefined));
+    pick.show();
+  });
+  pick.dispose();
+  return chosen;
+}
 
 /** The list and CodeLenses pass an id; the list's right-click menu passes `{ noteId }`. */
 function noteIdOf(arg: unknown): string | undefined {
@@ -52,7 +99,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const graph = new GraphView(store, context.extensionUri, diagnostics);
   // Before the store loads, so the first check, with its progress bar, runs.
   const tracker = new AnchorTracker(store);
-  context.subscriptions.push(store, annotations, tree, documents, graph, tracker);
+  context.subscriptions.push(store, annotations, tree, documents, graph, tracker, ...registerImageInput());
 
   const requireStore = (): boolean => {
     if (store.root) {
@@ -456,6 +503,40 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.setStatusBarMessage(`Laxative: note moved to ${target}.`, 4000);
   });
 
+  /**
+   * Puts notes in a group, by writing `@group` at the end of their first line.
+   * Called with `{ ids }` from the graph's selection, `{ id }` or an id for one
+   * note; with `group` as well (empty for none) there is nothing to ask.
+   */
+  command('laxative.moveToGroup', async (arg: unknown) => {
+    const given = arg as { ids?: unknown; group?: unknown } | undefined;
+    let notes: Note[];
+    if (Array.isArray(given?.ids)) {
+      notes = given.ids.map((id) => store.get(String(id))).filter((n): n is Note => n !== undefined);
+    } else {
+      const one = await resolve(arg);
+      notes = one ? [one] : [];
+    }
+    if (notes.length === 0) {
+      return;
+    }
+    const group =
+      typeof given?.group === 'string'
+        ? normalizeGroup(given.group)
+        : await pickGroup(store.all(), notes);
+    if (group === undefined) {
+      return;
+    }
+    await store.updateBodies(notes.map((note) => ({ id: note.id, body: setGroup(note.body, group) })));
+    const what = notes.length === 1 ? `"${notes[0].title}"` : `${notes.length} notes`;
+    void vscode.window.setStatusBarMessage(
+      group ? `Laxative: ${what} moved to @${group}.` : `Laxative: ${what} taken out of its group.`,
+      4000
+    );
+  });
+
+  command('laxative.insertImage', () => insertImage());
+
   command('laxative.showDiagnostics', () => {
     diagnostics.record('laxative', {
       version: String(context.extension.packageJSON?.version ?? 'unknown'),
@@ -492,6 +573,16 @@ export function activate(context: vscode.ExtensionContext): void {
     graph.benchmark(Array.isArray(scales) ? scales.map(Number) : [0.2, 0.5, 1, 2])
   );
 
+  // Opens and closes groups in the graph, for the integration tests.
+  command('laxative._graphGroups', (arg: unknown) => {
+    const action = arg as { action?: unknown; path?: unknown; mode?: unknown } | undefined;
+    graph.groups({
+      action: String(action?.action ?? ''),
+      path: typeof action?.path === 'string' ? action.path : undefined,
+      mode: typeof action?.mode === 'string' ? action.mode : undefined
+    });
+  });
+
   // Runs the one-time clean-up of the old settings, for the integration tests.
   command('laxative._migrate', () => migrateLegacyFiles(store));
 
@@ -503,7 +594,9 @@ export function activate(context: vscode.ExtensionContext): void {
       store: note.store,
       file: note.file,
       line: note.line,
-      lost: note.lost === true
+      lost: note.lost === true,
+      title: note.title,
+      group: note.group ?? null
     })),
     visible: tree.visibleIds(),
     files: store.noteFiles(),

@@ -446,6 +446,84 @@ describe('Laxative extension', function () {
     );
   });
 
+  it('puts notes in a group by the end of their first line, and the graph folds it', async () => {
+    await writeStore([
+      makeNote({ id: 'grpaaaa1', body: 'One\n\nlinks to [[grpdddd4]]' }),
+      makeNote({ id: 'grpbbbb2', line: 2, body: 'Two @old\n\nlinks to [[grpdddd4]]' }),
+      makeNote({ id: 'grpcccc3', line: 3, body: 'Three @auth/login' }),
+      makeNote({ id: 'grpdddd4', file: 'src/other.ts', body: 'Four' })
+    ]);
+    await vscode.commands.executeCommand('laxative.showGraph');
+    await waitFor(async () => ((await renderReport()).graph?.nodes === 4 ? true : undefined), 'the graph');
+
+    await vscode.commands.executeCommand('laxative.moveToGroup', {
+      ids: ['grpaaaa1', 'grpbbbb2'],
+      group: '@Auth'
+    });
+    const notes = await waitFor(async () => {
+      const stored = await tryReadStore();
+      return stored?.find((n) => n.id === 'grpaaaa1')?.body.startsWith('One @auth') ? stored : undefined;
+    }, 'the group to be written');
+    const two = notes.find((n) => n.id === 'grpbbbb2')!;
+    assert.strictEqual(two.body, 'Two @auth\n\nlinks to [[grpdddd4]]', 'only the end of the first line changed');
+    assert.strictEqual(two.title, 'Two', 'the group is not part of the name');
+    const listed = await vscode.commands.executeCommand<{ notes: { id: string; group: string | null }[] }>(
+      'laxative._notes'
+    );
+    assert.deepStrictEqual(
+      listed?.notes.filter((n) => n.id.startsWith('grp')).map((n) => n.group).sort(),
+      ['auth', 'auth', 'auth/login', null]
+    );
+
+    await vscode.commands.executeCommand('laxative._graphGroups', { action: 'collapseAll' });
+    const folded = await waitFor(async () => {
+      const graph = (await renderReport()).graph;
+      return graph?.shown === 2 ? graph : undefined;
+    }, 'the graph to fold @auth into one bubble');
+    assert.deepStrictEqual(folded.groups, [{ path: 'auth', total: 3 }]);
+    assert.strictEqual(folded.edges, 1, 'two links to Four are one link from the bubble');
+
+    await vscode.commands.executeCommand('laxative._graphGroups', { action: 'expandAll' });
+    await waitFor(
+      async () => ((await renderReport()).graph?.shown === 4 ? true : undefined),
+      'the graph to open it again'
+    );
+  });
+
+  it('shows images from .laxative/ and from the project in the reading panel', async () => {
+    // A 1x1 PNG, in both places a note can take an image from.
+    const pixel = Uint8Array.from(
+      atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+      (c) => c.charCodeAt(0)
+    );
+    const root = workspaceRoot();
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, '.laxative', 'assets'));
+    await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(root, '.laxative', 'assets', 'dot.png'), pixel);
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, 'docs'));
+    await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(root, 'docs', 'dot.png'), pixel);
+    try {
+      await writeStore([
+        makeNote({
+          id: 'imgnote1',
+          body: 'Pictures\n\n![kept with the notes](assets/dot.png)\n\n![in the project](docs/dot.png)'
+        })
+      ]);
+      await vscode.commands.executeCommand('laxative.openNote', 'imgnote1');
+      const report = await waitFor(async () => {
+        const images = (await renderReport()).noteImages;
+        return images?.results?.length === 2 ? images : undefined;
+      }, 'the panel to report its images');
+      for (const image of report.results as { src: string; ok: boolean }[]) {
+        assert.ok(image.ok, `${image.src} loaded`);
+      }
+      assert.ok(report.results[0].src.includes('/.laxative/assets/dot.png'));
+      assert.ok(report.results[1].src.includes('/docs/dot.png'));
+    } finally {
+      await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, 'docs'), { recursive: true });
+      await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, '.laxative', 'assets'), { recursive: true });
+    }
+  });
+
   it('registers the graph as a view rather than an editor tab', () => {
     const views = vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON?.contributes?.views;
     const graphViews = views?.laxativeGraph as { id: string; type: string }[] | undefined;

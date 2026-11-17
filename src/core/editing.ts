@@ -23,6 +23,15 @@ export function refPrefix(lineUpToCursor: string): Prefix | undefined {
   return match ? { query: match[1], start: match.index } : undefined;
 }
 
+/** An unescaped `@` before the cursor, i.e. the user is naming a group. */
+export function groupPrefix(lineUpToCursor: string): Prefix | undefined {
+  const match = /(?<!\\)(@[\w/-]*)$/.exec(lineUpToCursor);
+  if (!match) {
+    return undefined;
+  }
+  return { query: match[1].slice(1), start: lineUpToCursor.length - match[1].length };
+}
+
 /** A `#` before the cursor that would become a hashtag, i.e. the user is tagging. */
 export function tagPrefix(lineUpToCursor: string): Prefix | undefined {
   const match = /(?:^|[^\w`#/&(\\])(#[\w-]*)$/.exec(lineUpToCursor);

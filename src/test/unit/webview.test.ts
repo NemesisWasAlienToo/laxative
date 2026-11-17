@@ -455,6 +455,11 @@ describe('graph webview', () => {
     <canvas id="canvas"></canvas>
     <div id="tip" hidden></div>
     <div id="options" hidden>
+      <div id="groupHead" hidden></div>
+      <label><input id="groupByMark" type="checkbox" checked></label>
+      <label><input id="groupByPath" type="checkbox"></label>
+      <button id="expandAll" type="button">Expand all</button>
+      <button id="collapseAll" type="button">Collapse all</button>
       <label><input id="showFiles" type="checkbox" checked></label>
       <label><input id="showTags" type="checkbox" checked></label>
       <label><input id="linkPull" type="checkbox" checked></label>
@@ -763,6 +768,7 @@ describe('graph webview', () => {
       'Go to code',
       'Edit note',
       'Copy reference',
+      'Move to group…',
       'Delete note'
     ]);
 
@@ -1269,6 +1275,215 @@ describe('graph webview', () => {
     );
     await delay(300); // persisting is debounced
     assert.strictEqual(harness.state.current.linkTension, false, 'the choice is remembered');
+  });
+
+  describe('groups', () => {
+    // a and b in @auth, c in @auth/login, d on its own; all three link to d.
+    const grouped = {
+      type: 'graph',
+      nodes: [
+        { id: 'a', title: 'A', file: 'src/a.ts', line: 1, tags: [], excerpt: '', group: 'auth' },
+        { id: 'b', title: 'B', file: 'src/a.ts', line: 2, tags: [], excerpt: '', group: 'auth' },
+        { id: 'c', title: 'C', file: 'src/b.ts', line: 1, tags: [], excerpt: '', group: 'auth/login' },
+        { id: 'c2', title: 'C2', file: 'src/b.ts', line: 3, tags: [], excerpt: '', group: 'auth/login' },
+        { id: 'd', title: 'D', file: 'src/c.ts', line: 1, tags: [], excerpt: '' }
+      ],
+      edges: [
+        { from: 'a', to: 'd' },
+        { from: 'b', to: 'd' },
+        { from: 'c', to: 'd' }
+      ],
+      broken: []
+    };
+    const painted = () => harness.posted.filter((m: any) => m.type === 'painted').at(-1) as any;
+
+    it('starts with groups closed, and opens and closes them', async () => {
+      harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+      harness.send(grouped);
+      await delay(150);
+      assert.strictEqual(painted().shown, 2, 'closed at first: the @auth bubble, and d');
+      harness.send({ type: 'groups', action: 'expandAll' });
+      await delay(100);
+      assert.strictEqual(painted().shown, 5, 'every note on the canvas');
+      assert.deepStrictEqual(plain(painted().open).sort(), ['auth', 'auth/login']);
+
+      harness.send({ type: 'groups', action: 'collapseAll' });
+      await delay(100);
+      assert.strictEqual(painted().shown, 2, 'one bubble for @auth, and d');
+      assert.deepStrictEqual(plain(painted().groups), [{ path: 'auth', total: 4 }]);
+      assert.strictEqual(painted().edges, 1, "the three links to d are one link from the bubble");
+      assert.match(harness.window.document.getElementById('stats').textContent, /1 closed group/);
+
+      harness.send({ type: 'groups', action: 'expand', path: 'auth' });
+      await delay(100);
+      assert.strictEqual(painted().shown, 4, 'a, b, the closed @auth/login bubble, and d');
+      assert.deepStrictEqual(plain(painted().groups), [{ path: 'auth/login', total: 2 }]);
+
+      await delay(300); // persisting is debounced
+      assert.strictEqual(harness.state.current.groupOpen['mark:auth'], true, 'remembered, per person');
+    });
+
+    /** Four open groups of six linked notes, plus links between groups. */
+    const four = {
+      type: 'graph',
+      nodes: Array.from({ length: 24 }, (_, i) => ({
+        id: `q${i}`,
+        title: `Q${i}`,
+        file: `src/f${i % 3}.ts`,
+        line: i,
+        tags: [],
+        excerpt: '',
+        group: `g${Math.floor(i / 6)}`
+      })),
+      edges: Array.from({ length: 24 }, (_, i) => ({ from: `q${i}`, to: `q${(i * 7 + 3) % 24}` })),
+      broken: []
+    };
+    const settle = async () => {
+      // Until it stops moving, then until the positions are saved.
+      let last = '';
+      await delay(400); // saving is debounced
+      for (let i = 0; i < 40; i++) {
+        await delay(150);
+        const now = JSON.stringify(harness.state.current?.positions ?? {});
+        if (now === last && now !== '{}') return harness.state.current;
+        last = now;
+      }
+      return harness.state.current;
+    };
+    const circles = (positions: Record<string, number[]>) =>
+      [0, 1, 2, 3].map((g) => {
+        const points = four.nodes.filter((n) => n.group === `g${g}`).map((n) => positions[n.id]);
+        const cx = points.reduce((s, p) => s + p[0], 0) / points.length;
+        const cy = points.reduce((s, p) => s + p[1], 0) / points.length;
+        const r = Math.max(...points.map((p) => Math.hypot(p[0] - cx, p[1] - cy)));
+        return { cx, cy, r };
+      });
+
+    it('keeps open groups apart, however their notes are linked', async () => {
+      harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+      harness.send(four);
+      harness.send({ type: 'groups', action: 'expandAll' });
+      const { positions } = await settle();
+      const groups = circles(positions);
+      for (let a = 0; a < 4; a++) {
+        for (let b = a + 1; b < 4; b++) {
+          const d = Math.hypot(groups[a].cx - groups[b].cx, groups[a].cy - groups[b].cy);
+          assert.ok(
+            d > groups[a].r + groups[b].r,
+            `g${a} and g${b} do not overlap (${d.toFixed(0)} apart, radii ${groups[a].r.toFixed(0)} + ${groups[b].r.toFixed(0)})`
+          );
+        }
+      }
+    });
+
+    it('closes a group where it is, without pushing the others away, and opens it compact', async () => {
+      harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+      harness.send(four);
+      harness.send({ type: 'groups', action: 'expandAll' });
+      const { positions: before } = await settle();
+      const open = circles(before);
+      for (const [g, c] of open.entries()) {
+        assert.ok(c.r < 100, `open g${g} is compact (radius ${c.r.toFixed(0)})`);
+      }
+
+      harness.send({ type: 'groups', action: 'collapse', path: 'g0' });
+      const { positions: closed } = await settle();
+      assert.strictEqual(painted().shown, 19, 'the bubble and the other 18 notes');
+      const shut = circles(closed);
+      assert.ok(
+        Math.hypot(shut[0].cx - open[0].cx, shut[0].cy - open[0].cy) < 60,
+        `the bubble is where the group was (${Math.hypot(shut[0].cx - open[0].cx, shut[0].cy - open[0].cy).toFixed(0)}, others ${[1,2,3].map((g) => Math.hypot(shut[g].cx - open[g].cx, shut[g].cy - open[g].cy).toFixed(0))})`
+      );
+      for (const g of [1, 2, 3]) {
+        const moved = Math.hypot(shut[g].cx - open[g].cx, shut[g].cy - open[g].cy);
+        assert.ok(moved < 60, `g${g} stays near where it was (moved ${moved.toFixed(0)})`);
+      }
+
+      harness.send({ type: 'groups', action: 'expand', path: 'g0' });
+      const { positions: reopened } = await settle();
+      const again = circles(reopened);
+      assert.ok(again[0].r < 100, `reopened g0 is compact (radius ${again[0].r.toFixed(0)})`);
+    });
+
+    it('moves an open group as one piece when dragged by its name', async () => {
+      harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+      harness.send(four);
+      harness.send({ type: 'groups', action: 'expandAll' });
+      const { positions: before, view } = await settle();
+      // The name sits on top of the outline: the group's middle, its radius up.
+      const ids = four.nodes.filter((n) => n.group === 'g0').map((n) => n.id);
+      const points = ids.map((id) => before[id]);
+      const cx = points.reduce((s, p) => s + p[0], 0) / points.length;
+      const cy = points.reduce((s, p) => s + p[1], 0) / points.length;
+      const radii = 5.5 + Math.sqrt(2) * 3.6; // a note with a link or two
+      const r = Math.max(...points.map((p) => Math.hypot(p[0] - cx, p[1] - cy) + radii)) + 18;
+      const canvas = harness.window.document.getElementById('canvas');
+      const at = (wx: number, wy: number) => ({
+        clientX: wx * view.scale + view.x,
+        clientY: wy * view.scale + view.y,
+        bubbles: true
+      });
+      const mouse = (target: any, type: string, wx: number, wy: number) =>
+        target.dispatchEvent(new harness.window.MouseEvent(type, at(wx, wy)));
+      // Aim a little inside the top of the outline, at the label.
+      const lx = cx;
+      const ly = cy - r - 2;
+      mouse(canvas, 'mousedown', lx, ly);
+      for (let i = 1; i <= 10; i++) {
+        mouse(harness.window, 'mousemove', lx + i * 30, ly);
+        await delay(16);
+      }
+      mouse(harness.window, 'mouseup', lx + 300, ly);
+      const { positions: after } = await settle();
+      const moves = ids.map((id) => after[id][0] - before[id][0]);
+      assert.ok(Math.min(...moves) > 200, `every note in the group went right (${moves.map((m) => m.toFixed(0))})`);
+      assert.ok(Math.max(...moves) - Math.min(...moves) < 40, 'together, keeping its shape');
+    });
+
+    it('keeps an open group inside the outline of the group it is in', async () => {
+      harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+      harness.send(grouped);
+      harness.send({ type: 'groups', action: 'expandAll' });
+      await settle();
+      const outlines = plain(painted().outlines) as { path: string; x: number; y: number; r: number }[];
+      const outer = outlines.find((o) => o.path === 'auth')!;
+      const inner = outlines.find((o) => o.path === 'auth/login')!;
+      const d = Math.hypot(inner.x - outer.x, inner.y - outer.y);
+      assert.ok(d + inner.r <= outer.r, `@auth/login is inside @auth (${(d + inner.r).toFixed(0)} <= ${outer.r.toFixed(0)})`);
+    });
+
+    it('starts with groups closed in a big graph', async () => {
+      harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+      const many = Array.from({ length: 600 }, (_, i) => ({
+        id: `n${i}`,
+        title: `N${i}`,
+        file: 'src/a.ts',
+        line: i,
+        tags: [],
+        excerpt: '',
+        group: `g${i % 6}`
+      }));
+      harness.send({ type: 'graph', nodes: many, edges: [], broken: [] });
+      await delay(300);
+      assert.strictEqual(painted().shown, 6, 'six bubbles, not 600 notes');
+    });
+
+    it('groups by folder and file instead, when asked', async () => {
+      harness = load('graph.js', HTML, prepareCanvas({ width: 800, height: 600 }));
+      harness.send(grouped);
+      await delay(100);
+      harness.send({ type: 'groups', action: 'mode', mode: 'path' });
+      harness.send({ type: 'groups', action: 'collapseAll' });
+      await delay(100);
+      assert.deepStrictEqual(plain(painted().groups), [{ path: 'src', total: 5 }]);
+      harness.send({ type: 'groups', action: 'expand', path: 'src' });
+      await delay(100);
+      assert.deepStrictEqual(
+        plain(painted().groups).map((g: any) => g.path).sort(),
+        ['src/a.ts', 'src/b.ts'],
+        'a file with one note is just the note'
+      );
+    });
   });
 
   describe('selecting several notes', () => {

@@ -285,6 +285,16 @@
         "category": "Laxative"
       },
       {
+        "command": "laxative.moveToGroup",
+        "title": "Move to Group...",
+        "category": "Laxative"
+      },
+      {
+        "command": "laxative.insertImage",
+        "title": "Insert Image...",
+        "category": "Laxative"
+      },
+      {
         "command": "laxative.groupByStore",
         "title": "Group Notes by Note File",
         "category": "Laxative",
@@ -356,6 +366,10 @@
         {
           "command": "laxative.collapseAll",
           "when": "false"
+        },
+        {
+          "command": "laxative.insertImage",
+          "when": "resourceScheme == laxative"
         }
       ],
       "editor/context": [
@@ -367,6 +381,11 @@
           "command": "laxative.notesAtCursor",
           "group": "laxative@2",
           "when": "laxative.hasNoteAtCursor"
+        },
+        {
+          "command": "laxative.insertImage",
+          "when": "resourceScheme == laxative",
+          "group": "laxative@3"
         }
       ],
       "view/title": [
@@ -496,6 +515,11 @@
           "command": "laxative.moveNoteToFile",
           "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
           "group": "1_mod@2"
+        },
+        {
+          "command": "laxative.moveToGroup",
+          "when": "webviewId == 'laxative.notesView' && webviewSection == 'note'",
+          "group": "1_mod@3"
         },
         {
           "command": "laxative.deleteNote",

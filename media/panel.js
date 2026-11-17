@@ -138,7 +138,19 @@
       ),
       // No title heading of our own: the note's first line is already the first
       // thing the rendered markdown shows, and the tab carries it too.
-      el('div', { className: 'meta' }, reveal, tagChips(state.meta.tags)),
+      el(
+        'div',
+        { className: 'meta' },
+        reveal,
+        state.meta.group
+          ? el('span', {
+              className: 'chip group',
+              textContent: `@${state.meta.group}`,
+              title: 'The group this note is in: the @name at the end of its first line'
+            })
+          : null,
+        tagChips(state.meta.tags)
+      ),
       body()
     );
   }
@@ -154,6 +166,25 @@
       empty: !!state.empty,
       title: state.note ? state.note.title : null
     });
+    // ...and whether each image actually loaded, once they all have or have
+    // failed: a blocked image is otherwise only a broken icon nobody reports.
+    const images = [...root.querySelectorAll('img')];
+    if (images.length > 0) {
+      Promise.all(
+        images.map(
+          (img) =>
+            new Promise((done) => {
+              const result = () => done({ src: img.getAttribute('src'), ok: img.naturalWidth > 0 });
+              if (img.complete) {
+                result();
+              } else {
+                img.addEventListener('load', result, { once: true });
+                img.addEventListener('error', result, { once: true });
+              }
+            })
+        )
+      ).then((results) => vscode.postMessage({ type: 'images', results }));
+    }
   });
 
   vscode.postMessage({ type: 'ready' });

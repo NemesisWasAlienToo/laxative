@@ -2,7 +2,8 @@
 // for trying the extension at the size of a big project by hand:
 //   5,000 notes scattered over src/big/mod*/file*.ts
 //   1,000 notes on one large file, src/big/huge.ts (8,000 lines)
-// The notes go in .laxative/big.json, beside the sandbox's own note files.
+// The notes go in .laxative/big.json, beside the sandbox's own note files,
+// grouped by folder: @big/mod0 ... @big/mod29, and @big/huge.
 //
 //   node docker/seed-big.mjs <project-dir>
 //
@@ -93,10 +94,12 @@ const notes = [];
 const make = (file, line, n) => {
   const title = `Note ${n} on ${path.basename(file)}`;
   const other = idOf(Math.floor(random() * (SCATTERED + HUGE_NOTES)));
+  // Grouped the way the code is: @big/mod12, and @big/huge for the big file.
+  const group = `big/${path.basename(path.dirname(file)) === 'big' ? 'huge' : path.basename(path.dirname(file))}`;
   return {
     id: idOf(n),
     title,
-    body: `${title}\n\nWhy this line matters, and what to watch for when it changes. See [[${other}]]. #area${n % 40} #team${n % 7}`,
+    body: `${title} @${group}\n\nWhy this line matters, and what to watch for when it changes. See [[${other}]]. #area${n % 40} #team${n % 7}`,
     file,
     line,
     character: 2,
