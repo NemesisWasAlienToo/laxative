@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+- **Notes follow their code.** Each note keeps a short snippet: its line and
+  the one either side, trimmed, at most 160 characters each. When a file
+  changes, in the editor or on disk (a `git pull`, a patch, a terminal), the
+  note is put back where that code is now. Only the changed files are checked,
+  and every file is checked once at startup, with a progress bar. A note on a
+  repeated line, like a `}`, moves the way the notes around it moved.
+- **Code not found.** When a note's code is gone, the note says "code not
+  found" instead of showing a wrong line, and nothing is drawn for it in the
+  editor. It keeps its old place, so it comes back if the code does (for
+  example, after switching back to a branch).
+- **Fixed: the reading view showed an old version of a note** after it had been
+  edited and retitled. It now shows the saved note, or your unsaved typing
+  while you edit.
+- **Edit replaces the reading view** instead of opening the editor beside it.
+- **The graph is fast with thousands of notes.** With 6,000 notes it appears in
+  under half a second (was 9 s), and dragging a note runs at about 60 frames a
+  second (a frame took over 4 s). Notes now only push on the notes near them,
+  dragging in a big graph moves only the notes around the one you hold, and
+  links and notes are drawn in batches, skipping what is off screen.
+- **The graph says "Loading notes…"** until the notes arrive, instead of "No
+  notes yet".
+- **Zooming a big graph is smooth.** With 6,000 notes a frame takes 4–23 ms at
+  any zoom (was 100–200 ms). Links are drawn only where they are on screen, one
+  pixel wide, dotted only while that is cheap; zoomed right out, the faint file
+  and hashtag links and the too-small arrow heads are left out.
+- **A note you place by hand stays there.** Its links no longer pull it back
+  towards the notes it is linked to whenever something near it moves; only
+  notes right next to it nudge it. **Lay the notes out again** lets go of it.
+- **Performance tests run on their own**, with `./docker/test.sh perf`; the
+  usual test run no longer includes them.
+- Measured on a 600-file project with 6,000 notes (3.5 MB of notes): startup
+  check 0.2–0.4 s, a 100-file pull 0.3 s, and the extension host never blocked
+  for more than about 100 ms. Moves are written once things go quiet, and not
+  while the note file is open in an editor.
+
 ## 0.8.0
 
 - **Fixed: duplicating an annotated line left a gutter icon on the copy.** The

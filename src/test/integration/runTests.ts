@@ -33,6 +33,7 @@ async function main(): Promise<void> {
       cachePath: process.env.VSCODE_TEST_CACHE || path.join(root, '.vscode-test'),
       extensionDevelopmentPath: root,
       extensionTestsPath: path.resolve(__dirname, './index'),
+      extensionTestsEnv: { LAXATIVE_PERF: process.env.LAXATIVE_PERF ?? '' },
       launchArgs: [
         workspace,
         '--disable-extensions',

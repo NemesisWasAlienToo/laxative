@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { Note } from './core/types';
 import { deriveTitle, newId, parse, serialize, sortNotes } from './core/schema';
 import { parseTags } from './core/tags';
+import { Placement, Snippet, sameSnippet } from './core/anchoring';
+import { located } from './core/display';
+import { timed, timedAsync } from './timing';
 import {
   NOTES_DIR,
   NoteFileConfig,
@@ -12,6 +15,19 @@ import {
 } from './core/noteFiles';
 
 export type ImportMode = 'merge' | 'replace';
+
+/** True when a tab shows this file. */
+function openInEditor(uri: vscode.Uri): boolean {
+  const target = uri.toString();
+  return vscode.window.tabGroups.all.some((group) =>
+    group.tabs.some(
+      (tab) => tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === target
+    )
+  );
+}
+
+/** How long moved notes wait, after the last move, to be written. */
+const MOVE_WRITE_DELAY = 1000;
 
 /** One notes file on disk, and the state needed to read and write it safely. */
 class NoteFile {
@@ -83,8 +99,24 @@ class NoteFile {
     return ((await this.readFile()) ?? '') !== this.lastWritten;
   }
 
-  async persist(): Promise<void> {
+  /**
+   * One write at a time: two at once share the temporary file, and the second
+   * rename finds it already gone. Each write takes the notes as they are when
+   * its turn comes, so the last one to run writes the latest state.
+   */
+  persist(): Promise<void> {
+    const write = this.writing.then(() => this.write());
+    this.writing = write.catch(() => undefined);
+    return write;
+  }
+
+  private writing: Promise<void> = Promise.resolve();
+
+  private async write(): Promise<void> {
     const text = serialize(this.notes);
+    if (text === this.lastWritten) {
+      return; // Already on disk: rewriting it would only make VS Code reload it.
+    }
     this.writesInFlight++;
     this.writeGeneration++;
     try {
@@ -130,9 +162,21 @@ export class NoteStore implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.emitter.event;
+  /**
+   * The notes were read from disk afresh, so where they are has to be checked
+   * against the code again. Not fired for our own writes.
+   */
+  private readonly loadEmitter = new vscode.EventEmitter<void>();
+  readonly onDidLoad = this.loadEmitter.event;
 
   constructor() {
     this.disposables.push(
+      // A note file held back while open in an editor is written once closed.
+      vscode.window.tabGroups.onDidChangeTabs((e) => {
+        if (e.closed.length > 0 && this.moved.size > 0) {
+          this.scheduleMoveWrite();
+        }
+      }),
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (
           (e.affectsConfiguration('laxative.activeNoteFiles') ||
@@ -319,7 +363,18 @@ export class NoteStore implements vscode.Disposable {
     ]);
   }
 
+  /** False until the note files have been read once. */
+  get ready(): boolean {
+    return this.loadedOnce;
+  }
+  private loadedOnce = false;
+
   async reload(): Promise<void> {
+    await timedAsync('load notes', () => this.load());
+    this.loadEmitter.fire();
+  }
+
+  private async load(): Promise<void> {
     this.loadedFrom = this.settingsKey();
     const root = this.root;
     this.discovered = await this.discover();
@@ -341,6 +396,7 @@ export class NoteStore implements vscode.Disposable {
     }
     this.watchFolder();
     this.remerge();
+    this.loadedOnce = true;
     this.emitter.fire();
   }
 
@@ -350,6 +406,10 @@ export class NoteStore implements vscode.Disposable {
    * and the other copy is left out rather than making references ambiguous.
    */
   private remerge(): void {
+    timed('remerge', () => this.rebuildIndexes());
+  }
+
+  private rebuildIndexes(): void {
     const seen = new Set<string>();
     const notes: Note[] = [];
     for (const file of this.loaded) {
@@ -407,6 +467,112 @@ export class NoteStore implements vscode.Disposable {
     await file.read();
     this.remerge();
     this.emitter.fire();
+    this.loadEmitter.fire();
+  }
+
+  /**
+   * Puts notes where their code is now. `null` means the code is not in the
+   * file any more. Only the place moves: the note is not edited, so its
+   * `updatedAt` stays as it was. Each note file is written at most once.
+   */
+  async reanchor(placements: ReadonlyMap<string, Placement | null>): Promise<number> {
+    const dirty = new Set<NoteFile>();
+    let changed = false;
+    let movedCount = 0;
+    for (const file of this.loaded) {
+      for (const note of file.notes) {
+        const placement = placements.get(note.id);
+        if (placement === undefined || !located(note)) {
+          continue;
+        }
+        if (placement === null) {
+          if (!note.lost) {
+            note.lost = true; // In memory only: nothing to write.
+            changed = true;
+          }
+          continue;
+        }
+        if (note.lost) {
+          delete note.lost;
+          changed = true;
+        }
+        const moved = note.line !== placement.line || note.character !== placement.character;
+        if (moved || !sameSnippet(note.snippet, placement.snippet)) {
+          // A note from before snippets existed only gains one: that is kept
+          // in memory and written with the file's next real change, so opening
+          // an older workspace doesn't rewrite every note file in it.
+          const backfill = !moved && note.snippet === undefined;
+          note.line = placement.line;
+          note.character = placement.character;
+          note.snippet = placement.snippet;
+          if (!backfill) {
+            dirty.add(file);
+          }
+          if (moved) {
+            changed = true;
+            movedCount++;
+          }
+        }
+      }
+    }
+    for (const file of dirty) {
+      this.moved.add(file);
+    }
+    if (dirty.size > 0) {
+      this.scheduleMoveWrite();
+    }
+    if (changed) {
+      this.remerge();
+      timed('views after a move', () => this.emitter.fire());
+    }
+    return movedCount;
+  }
+
+  /** Note files whose notes moved, waiting to be written. */
+  private readonly moved = new Set<NoteFile>();
+  private moveTimer?: ReturnType<typeof setTimeout>;
+
+  /**
+   * Moves are shown at once but written when things go quiet: typing, or a
+   * pull that touches many files, then writes each note file once rather than
+   * after every check. A big note file that is open in VS Code costs VS Code
+   * a reload every time it is written.
+   */
+  private scheduleMoveWrite(): void {
+    if (this.moveTimer !== undefined) {
+      clearTimeout(this.moveTimer);
+    }
+    this.moveTimer = setTimeout(() => void this.writeMoves(), MOVE_WRITE_DELAY);
+  }
+
+  /**
+   * Writes any moves still waiting. `always` is for when the extension stops:
+   * then a note file open in an editor is written too.
+   */
+  async writeMoves(always = false): Promise<void> {
+    if (this.moveTimer !== undefined) {
+      clearTimeout(this.moveTimer);
+      this.moveTimer = undefined;
+    }
+    const files = [...this.moved];
+    this.moved.clear();
+    for (const file of files) {
+      // Reloaded since (that re-checks the notes anyway), or changed on disk
+      // by a pull or a teammate: writing would put the old notes back over it.
+      if (!this.loaded.includes(file) || (await file.changedOnDisk())) {
+        continue;
+      }
+      // Open in an editor: VS Code copies a document into the extension host
+      // again on every write, which for a big note file stalls every
+      // extension for seconds. The moves are shown everywhere already; the
+      // file gets them when its editor is closed.
+      if (!always && openInEditor(file.uri)) {
+        this.moved.add(file);
+        continue;
+      }
+      file.notes = sortNotes(file.notes);
+      await timedAsync('write note file', () => file.persist());
+    }
   }
 
   private fileOf(id: string): NoteFile | undefined {
@@ -451,6 +617,7 @@ export class NoteStore implements vscode.Disposable {
       file?: string;
       line?: number;
       character?: number;
+      snippet?: Snippet;
       body: string;
     },
     target?: string
@@ -465,7 +632,12 @@ export class NoteStore implements vscode.Disposable {
       title: deriveTitle(input.body),
       body: input.body,
       ...(input.file !== undefined
-        ? { file: input.file, line: input.line ?? 0, character: input.character ?? 0 }
+        ? {
+            file: input.file,
+            line: input.line ?? 0,
+            character: input.character ?? 0,
+            ...(input.snippet ? { snippet: input.snippet } : {})
+          }
         : {}),
       tags: parseTags(input.body),
       store: file.name,
@@ -569,11 +741,15 @@ export class NoteStore implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.moveTimer !== undefined) {
+      clearTimeout(this.moveTimer);
+    }
     this.folderWatcher?.dispose();
     for (const file of this.loaded) {
       file.dispose();
     }
     this.emitter.dispose();
+    this.loadEmitter.dispose();
     for (const d of this.disposables) {
       d.dispose();
     }

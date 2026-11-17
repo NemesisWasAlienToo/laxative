@@ -1,6 +1,7 @@
 import { Note, NoteStoreFile, STORE_VERSION } from './types';
 import { Located, located } from './display';
 import { parseTags } from './tags';
+import { Snippet } from './anchoring';
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -64,6 +65,15 @@ function onDisk(note: Note): Note {
     // A note with no location carries no location fields at all, rather than
     // an empty path and a line 0 that read as a real place.
     ...(located(note) ? { file: note.file, line: note.line, character: note.character } : {}),
+    ...(located(note) && note.snippet
+      ? {
+          snippet: {
+            above: note.snippet.above,
+            line: note.snippet.line,
+            below: note.snippet.below
+          }
+        }
+      : {}),
     tags: note.tags,
     createdAt: note.createdAt,
     updatedAt: note.updatedAt
@@ -123,6 +133,18 @@ function locationOf(entry: Record<string, unknown>): Located | undefined {
   return { file, line: asPosition(entry.line), character: asPosition(entry.character) };
 }
 
+/** All three strings, or nothing: a half snippet would find the wrong line. */
+function snippetOf(value: unknown): Snippet | undefined {
+  const raw = value as Record<string, unknown> | undefined;
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const { above, line, below } = raw;
+  return typeof above === 'string' && typeof line === 'string' && typeof below === 'string'
+    ? { above, line, below }
+    : undefined;
+}
+
 /** Tolerant parser: unknown/missing fields are repaired rather than thrown away. */
 export function parse(text: string): Note[] {
   if (text.trim() === '') {
@@ -142,6 +164,7 @@ export function parse(text: string): Note[] {
       continue;
     }
     const at = locationOf(entry);
+    const snippet = at ? snippetOf(entry.snippet) : undefined;
     let id = asString(entry.id);
     if (!id || seen.has(id)) {
       id = newId(seen);
@@ -154,6 +177,7 @@ export function parse(text: string): Note[] {
       body,
       title: asString(entry.title) || deriveTitle(body),
       ...(at ?? {}),
+      ...(snippet ? { snippet } : {}),
       tags: parseTags(body),
       createdAt: asString(entry.createdAt, now),
       updatedAt: asString(entry.updatedAt, now),

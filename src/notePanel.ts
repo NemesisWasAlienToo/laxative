@@ -69,17 +69,33 @@ export class NotePanel {
   }
 
   /**
-   * What to render: the text of the open editor when there is one, so unsaved
-   * edits show up, otherwise what is stored.
+   * What to render: the editor's text while it has unsaved edits, so typing is
+   * previewed, otherwise what is stored.
+   *
+   * Only an editor with unsaved edits: a note's document is named after its
+   * title, so retitling a note leaves the old document behind, still holding
+   * the text from before. Taking any open document rendered that old version
+   * after the note had been edited and saved.
    */
   private bodyFor(note: Note): string {
-    const open = vscode.workspace.textDocuments.find(
+    const editing = vscode.workspace.textDocuments.find(
       (document) =>
         document.uri.scheme === NOTE_SCHEME &&
         document.uri.authority === note.id &&
-        !document.isClosed
+        !document.isClosed &&
+        document.isDirty
     );
-    return open ? open.getText() : note.body;
+    return editing ? editing.getText() : note.body;
+  }
+
+  /** The column the panel is in, when it is showing this note. */
+  static columnShowing(noteId: string): vscode.ViewColumn | undefined {
+    const current = NotePanel.current;
+    return current && current.noteId === noteId ? current.panel.viewColumn : undefined;
+  }
+
+  static close(): void {
+    NotePanel.current?.dispose();
   }
 
   static show(
@@ -164,6 +180,7 @@ export class NotePanel {
         file: note.file,
         line: note.line === undefined ? undefined : note.line + 1,
         character: note.character === undefined ? undefined : note.character + 1,
+        lost: note.lost === true,
         updatedAt: note.updatedAt,
         tags: parseTags(body)
       }

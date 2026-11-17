@@ -110,7 +110,10 @@
     const reveal = somewhere
       ? el('a', {
           className: 'location',
-          textContent: `${state.meta.file}:${state.meta.line}:${state.meta.character}`,
+          // A note whose code has gone has no line worth showing.
+          textContent: state.meta.lost
+            ? `${state.meta.file} · code not found`
+            : `${state.meta.file}:${state.meta.line}:${state.meta.character}`,
           href: '#'
         })
       : el('span', { className: 'location none', textContent: 'no location' });

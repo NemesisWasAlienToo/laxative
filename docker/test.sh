@@ -2,6 +2,7 @@
 # Build the docker image and run the extension's tests inside it.
 #   ./docker/test.sh            # typecheck + unit + integration + package
 #   ./docker/test.sh unit       # fast loop
+#   ./docker/test.sh perf       # performance tests, 6,000 notes (a few minutes)
 #   ./docker/test.sh integration
 set -euo pipefail
 

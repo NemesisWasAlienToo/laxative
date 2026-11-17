@@ -1,3 +1,5 @@
+import type { Snippet } from './anchoring';
+
 /** A single annotation. Notes never live in the source file they point at. */
 export interface Note {
   /** Stable short id, used as the target of `[[...]]` references. */
@@ -18,6 +20,17 @@ export interface Note {
   line?: number;
   /** 0-based column of the anchor within that line. */
   character?: number;
+  /**
+   * The code the note is on, so it can be found again after the file changes
+   * in ways nothing reports (a pull, a patch, a terminal edit).
+   */
+  snippet?: Snippet;
+  /**
+   * The note's code is not in the file any more. Worked out when the file is
+   * checked and never written to disk: the note keeps its location and
+   * snippet, so it finds its way back if the code returns (another branch).
+   */
+  lost?: boolean;
   tags: string[];
   /**
    * Which note file this note was read from. Assigned when the store loads a

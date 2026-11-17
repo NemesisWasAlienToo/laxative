@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NoteStore } from './store';
 import { Note } from './core/types';
 import { hoverMarkdown } from './markdown';
+import { timed } from './timing';
 
 /** The lines a document's marks were last drawn on, and how many times. */
 export interface Marks {
@@ -106,7 +107,7 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
       return [];
     }
     const line = editor.selection.active.line;
-    return this.store.byFile(file).filter((n) => n.line === line);
+    return this.store.byFile(file).filter((n) => !n.lost && n.line === line);
   }
 
   /** One redraw for a burst of edits, on the next quiet moment. */
@@ -126,9 +127,11 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
   }
 
   refreshAll(): void {
-    for (const editor of vscode.window.visibleTextEditors) {
-      this.refresh(editor);
-    }
+    timed('editor marks', () => {
+      for (const editor of vscode.window.visibleTextEditors) {
+        this.refresh(editor);
+      }
+    });
     const active = vscode.window.activeTextEditor;
     if (active) {
       this.updateCursorContext(active);
@@ -147,6 +150,9 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
     const all = this.store.all();
     const byLine = new Map<number, Note[]>();
     for (const note of this.store.byFile(file)) {
+      if (note.lost) {
+        continue; // Its code has gone; any line it was drawn on would be wrong.
+      }
       const line = Math.min(note.line ?? 0, Math.max(editor.document.lineCount - 1, 0));
       byLine.set(line, [...(byLine.get(line) ?? []), note]);
     }
@@ -198,7 +204,7 @@ export class Annotations implements vscode.Disposable, vscode.CodeLensProvider {
     if (!file) {
       return [];
     }
-    return this.store.byFile(file).map((note) => {
+    return this.store.byFile(file).filter((note) => !note.lost).map((note) => {
       const line = Math.min(note.line ?? 0, Math.max(document.lineCount - 1, 0));
       // Plain text on purpose: the gutter bubble is the note's only icon, and
       // a codicon here would put a second one on the same line.

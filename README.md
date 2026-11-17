@@ -270,6 +270,7 @@ a scratch dir inside the container. Downloaded VS Code builds are cached in the
 ```bash
 ./docker/try-it.sh          # real VS Code -> http://localhost:8443/vnc.html
 ./docker/try-it.sh --web    # code-server  -> http://localhost:8443
+./docker/try-it.sh --big    # plus 600 files and 6,000 notes, to try a big project
 ```
 
 The default runs the **real desktop VS Code build** — the same one the tests use

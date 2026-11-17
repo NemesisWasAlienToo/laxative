@@ -290,7 +290,55 @@ describe('Laxative extension', function () {
     }, 'the note to be stored');
     assert.strictEqual(notes[0].line, 2);
     assert.strictEqual(notes[0].character, 9);
-    assert.ok(!('snippet' in notes[0]), 'no copy of the annotated code is stored');
+    // Just the line and its neighbours, to find it again after the file changes.
+    assert.deepStrictEqual(notes[0].snippet, {
+      above: 'const value = compute();',
+      line: 'return value;',
+      below: '}'
+    });
+  });
+
+  it('follows its code when the file is changed outside the editor', async () => {
+    await writeStore([makeNote()]);
+    const original = await vscode.workspace.fs.readFile(appUri());
+    try {
+      // As a patch or a terminal would: straight to disk, with the file closed.
+      const text = new TextDecoder().decode(original);
+      await vscode.workspace.fs.writeFile(
+        appUri(),
+        new TextEncoder().encode(`// one\n// two\n// three\n${text}`)
+      );
+      const moved = await waitFor(async () => {
+        const notes = await tryReadStore();
+        return notes?.[0]?.line === 4 ? notes[0] : undefined;
+      }, 'the note to follow its line');
+      assert.strictEqual(moved.snippet?.line, 'const value = compute();');
+
+      // Its code deleted: shown as not found rather than on whatever is there now.
+      const lines = text.split('\n');
+      lines.splice(1, 1);
+      await vscode.workspace.fs.writeFile(appUri(), new TextEncoder().encode(lines.join('\n')));
+      const lost = await waitFor(async () => {
+        const result = await vscode.commands.executeCommand<{ notes: { id: string; lost: boolean }[] }>(
+          'laxative._notes'
+        );
+        return result?.notes.find((n) => n.id === 'note0001' && n.lost);
+      }, 'the note to be marked as lost');
+      assert.ok(lost);
+
+      // And back when the code comes back, as after switching branches.
+      await vscode.workspace.fs.writeFile(appUri(), original);
+      await waitFor(async () => {
+        const result = await vscode.commands.executeCommand<{ notes: { id: string; lost: boolean; line?: number }[] }>(
+          'laxative._notes'
+        );
+        const note = result?.notes.find((n) => n.id === 'note0001');
+        return note && !note.lost && note.line === 1 ? note : undefined;
+      }, 'the note to find its code again');
+    } finally {
+      await vscode.workspace.fs.writeFile(appUri(), original);
+      await settle();
+    }
   });
 
   it('derives hashtags from the body when the note is saved', async () => {
@@ -583,6 +631,53 @@ describe('Laxative extension', function () {
       }, 'the panel to follow unsaved edits');
       assert.strictEqual(report.title, 'Live title');
       assert.strictEqual((await readStore())[0].title, 'Saved title', 'the store is untouched');
+    });
+
+    it('renders the saved note, not an old document left behind by a retitle', async () => {
+      await writeStore([]);
+      // Written as "First title" in a document named after the empty note...
+      const first = await addNoteAtLine(1);
+      await first.edit((builder) => builder.insert(new vscode.Position(0, 0), 'First title'));
+      await first.document.save();
+      await settle();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      const id = (await readStore())[0].id;
+
+      // ...then edited again, which opens it under its new title.
+      await vscode.commands.executeCommand('laxative.editNote', id);
+      const second = vscode.window.activeTextEditor!;
+      assert.notStrictEqual(second.document.uri.toString(), first.document.uri.toString());
+      await second.edit((builder) =>
+        builder.replace(new vscode.Range(0, 0, 0, 11), 'Second title')
+      );
+      await second.document.save();
+      await settle();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+
+      await vscode.commands.executeCommand('laxative.openNote', id);
+      // Before the fix it rendered "First title", from the document left behind.
+      const report = await waitFor(async () => {
+        const panel = (await renderReport()).notePanel;
+        return panel?.title === 'Second title' ? panel : undefined;
+      }, 'the saved version, not the old document, to render');
+      assert.strictEqual(report.empty, false);
+    });
+
+    it('replaces the reading view with the editor when Edit is pressed', async () => {
+      await writeStore([makeNote()]);
+      await vscode.commands.executeCommand('laxative.openNote', 'note0001');
+      const panelTab = () =>
+        vscode.window.tabGroups.all
+          .flatMap((group) => group.tabs)
+          .find((tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.includes('laxative.note'));
+      const reading = await waitFor(() => panelTab(), 'the reading view');
+      const column = reading.group.viewColumn;
+
+      await vscode.commands.executeCommand('laxative.editNote', 'note0001');
+      await waitFor(() => (panelTab() ? undefined : true), 'the reading view to close');
+      const editor = vscode.window.activeTextEditor;
+      assert.strictEqual(editor?.document.uri.scheme, 'laxative');
+      assert.strictEqual(editor?.viewColumn, column, 'the editor took the reading view’s place');
     });
 
     it('suggests other notes after [[ and known hashtags after #', async () => {

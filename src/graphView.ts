@@ -4,6 +4,7 @@ import { buildGraph } from './core/refs';
 import { Diagnostics } from './diagnostics';
 import { NotePanel } from './notePanel';
 import { NOTE_SCHEME } from './noteDocuments';
+import { record, timed } from './timing';
 
 /** What a note's context menu in the graph may ask for, and nothing else. */
 const NODE_COMMANDS = new Set([
@@ -24,6 +25,33 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
   private view?: vscode.WebviewView;
   private readonly disposables: vscode.Disposable[] = [];
   private sentFocus?: string | null;
+  /** When the notes were last sent, to time the frame that draws them. */
+  private sentAt?: number;
+  private benchmarkReply?: (results: unknown) => void;
+
+  /**
+   * Has the graph time its own drawing at each zoom level, in the real
+   * webview: how long a frame takes to draw is only measurable where it is
+   * drawn. For the performance tests.
+   */
+  benchmark(scales: number[]): Promise<unknown> {
+    const view = this.view;
+    if (!view) {
+      return Promise.resolve(undefined);
+    }
+    return new Promise((resolve) => {
+      // A webview that never answers must not leave the caller waiting forever.
+      const timer = setTimeout(() => {
+        this.benchmarkReply = undefined;
+        resolve(undefined);
+      }, 30000);
+      this.benchmarkReply = (results) => {
+        clearTimeout(timer);
+        resolve(results);
+      };
+      void view.webview.postMessage({ type: 'benchmark', scales });
+    });
+  }
 
   constructor(
     private readonly store: NoteStore,
@@ -74,6 +102,19 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
           this.push();
         } else if (msg.type === 'painted') {
           this.diagnostics.record('graph', msg as Record<string, unknown>);
+          // From sending the notes to the first frame that shows them.
+          // A frame only reports when what it shows changes, so only a frame
+          // with the notes just sent ends the timing.
+          if (
+            this.sentAt !== undefined &&
+            (msg as { nodes?: unknown }).nodes === this.store.all().length
+          ) {
+            record('graph paint', performance.now() - this.sentAt);
+            this.sentAt = undefined;
+          }
+        } else if (msg.type === 'benchmark') {
+          this.benchmarkReply?.((msg as { results?: unknown }).results);
+          this.benchmarkReply = undefined;
         } else if (msg.type === 'open' && msg.id) {
           void this.open(msg.id, msg.reveal === true, msg.open !== false);
         } else if (msg.type === 'reveal' && msg.id) {
@@ -132,11 +173,16 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   private push(): void {
-    if (!this.view) {
+    // Before the notes are read, an empty graph would say there are none; the
+    // view says it is loading until the first real one arrives.
+    if (!this.view || !this.store.ready) {
       return;
     }
+    const started = performance.now();
     const graph = buildGraph(this.store.all());
-    void this.view.webview.postMessage({
+    this.sentAt = started;
+    const view = this.view;
+    timed('graph send', () => void view.webview.postMessage({
       type: 'graph',
       nodes: graph.nodes.map((n) => ({
         id: n.id,
@@ -144,13 +190,14 @@ export class GraphView implements vscode.WebviewViewProvider, vscode.Disposable 
         file: n.file,
         line: n.line,
         character: n.character,
+        lost: n.lost === true,
         tags: n.tags,
         excerpt: n.body.slice(0, 240)
       })),
       edges: graph.edges,
       broken: graph.broken,
       focus: (this.sentFocus = this.focusedNote())
-    });
+    }));
   }
 
   /**

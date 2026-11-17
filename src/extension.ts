@@ -19,6 +19,9 @@ import { exportNotes, importNotes } from './portability';
 import { Note } from './core/types';
 import { located, noteAnchor } from './core/display';
 import { tagIndex } from './core/tags';
+import { AnchorTracker } from './tracking';
+import { snapshotTimings } from './timing';
+import { Snippet, snippetAt } from './core/anchoring';
 
 /** The list and CodeLenses pass an id; the list's right-click menu passes `{ noteId }`. */
 function noteIdOf(arg: unknown): string | undefined {
@@ -36,14 +39,20 @@ function noteIdOf(arg: unknown): string | undefined {
   return record?.note?.id;
 }
 
+/** Kept so moves still waiting to be written are written when VS Code closes. */
+let activeStore: NoteStore | undefined;
+
 export function activate(context: vscode.ExtensionContext): void {
   const store = new NoteStore();
+  activeStore = store;
   const annotations = new Annotations(store, context);
   const tree = new NotesView(store, context.extensionUri, context.workspaceState);
   const documents = new NoteDocuments(store);
   const diagnostics = new Diagnostics();
   const graph = new GraphView(store, context.extensionUri, diagnostics);
-  context.subscriptions.push(store, annotations, tree, documents, graph);
+  // Before the store loads, so the first check, with its progress bar, runs.
+  const tracker = new AnchorTracker(store);
+  context.subscriptions.push(store, annotations, tree, documents, graph, tracker);
 
   const requireStore = (): boolean => {
     if (store.root) {
@@ -98,6 +107,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     try {
       const document = await vscode.workspace.openTextDocument(uri);
+      if (note.lost) {
+        // Its line number is from before the code went; open the file, but
+        // don't pretend to know where in it.
+        await vscode.window.showTextDocument(document, { preview: false });
+        void vscode.window.showWarningMessage('Laxative: code not found.');
+        return;
+      }
       const line = Math.min(note.line, Math.max(document.lineCount - 1, 0));
       const character = Math.min(note.character, document.lineAt(line).range.end.character);
       // Land the cursor exactly where the note was made, not just on the line.
@@ -177,7 +193,7 @@ export function activate(context: vscode.ExtensionContext): void {
    * list, the graph, references, hashtags, search — treats it the same.
    */
   const newNote = async (
-    where: { file: string; line: number; character: number } | undefined,
+    where: { file: string; line: number; character: number; snippet?: Snippet } | undefined,
     arg: unknown
   ): Promise<void> => {
     // Called with { target } there is nothing to ask, which also lets a
@@ -243,7 +259,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     // Read before anything is asked: a prompt takes the focus with it.
     const position = editor.selection.active;
-    await newNote({ file, line: position.line, character: position.character }, arg);
+    // The code it is on, so the note can find it again after the file changes.
+    const document = editor.document;
+    const text = (line: number) =>
+      line >= 0 && line < document.lineCount ? document.lineAt(line).text : '';
+    const snippet = snippetAt([text(position.line - 1), text(position.line), text(position.line + 1)], 1);
+    await newNote({ file, line: position.line, character: position.character, snippet }, arg);
   });
 
   /** A note about no particular line, wherever you are when you ask for it. */
@@ -262,8 +283,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   command('laxative.editNote', async (arg: unknown) => {
     const note = await resolve(arg);
-    if (note) {
-      await NoteDocuments.open(note);
+    if (!note) {
+      return;
+    }
+    // Reading this note? The editor takes the reading view's place rather
+    // than opening beside it.
+    const reading = NotePanel.columnShowing(note.id);
+    const editor = await NoteDocuments.open(note, reading);
+    if (editor && reading !== undefined) {
+      NotePanel.close();
     }
   });
 
@@ -441,7 +469,8 @@ export function activate(context: vscode.ExtensionContext): void {
     ...diagnostics.snapshot(),
     version: String(context.extension.packageJSON?.version ?? 'unknown'),
     remote: vscode.env.remoteName ?? null,
-    icons: tree.iconReport()
+    icons: tree.iconReport(),
+    timings: snapshotTimings()
   }));
 
   // Where the gutter and inline marks were last drawn, for the integration
@@ -451,13 +480,31 @@ export function activate(context: vscode.ExtensionContext): void {
     return editor ? annotations.marks(editor.document) : undefined;
   });
 
+  // Checks where notes are, for the integration tests and for measuring: one
+  // file when given one, else every file with notes.
+  command('laxative._checkAnchors', (arg: unknown) => {
+    const file = (arg as { file?: unknown } | undefined)?.file;
+    return typeof file === 'string' ? tracker.checkFiles([file]) : tracker.checkAll();
+  });
+
+  // How long the graph takes to draw at each zoom level, for the performance test.
+  command('laxative._graphBenchmark', (scales: unknown) =>
+    graph.benchmark(Array.isArray(scales) ? scales.map(Number) : [0.2, 0.5, 1, 2])
+  );
+
   // Runs the one-time clean-up of the old settings, for the integration tests.
   command('laxative._migrate', () => migrateLegacyFiles(store));
 
   // A window onto what the store currently holds, for the integration tests:
   // which notes are visible, and which file each of them came from.
   command('laxative._notes', () => ({
-    notes: store.all().map((note) => ({ id: note.id, store: note.store, file: note.file })),
+    notes: store.all().map((note) => ({
+      id: note.id,
+      store: note.store,
+      file: note.file,
+      line: note.line,
+      lost: note.lost === true
+    })),
     visible: tree.visibleIds(),
     files: store.noteFiles(),
     rows: tree.rows(),
@@ -551,6 +598,7 @@ export function activate(context: vscode.ExtensionContext): void {
     .then(() => migrateLegacyFiles(store));
 }
 
-export function deactivate(): void {
-  // Nothing to clean up beyond context.subscriptions.
+export function deactivate(): Promise<void> | undefined {
+  // Everything else goes with context.subscriptions.
+  return activeStore?.writeMoves(true);
 }

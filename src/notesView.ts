@@ -3,6 +3,7 @@ import { NoteStore } from './store';
 import { Query, isActive } from './core/search';
 import { GroupBy, NoteList, buildList, describeList, flatten } from './core/noteList';
 import { FileIcons, IconReport } from './fileIcons';
+import { timed } from './timing';
 
 export type { GroupBy };
 
@@ -190,7 +191,7 @@ export class NotesView implements vscode.WebviewViewProvider, vscode.Disposable 
 
   /** Filtered and grouped once per change, not once per question asked of it. */
   private data(): NoteList {
-    this.list ??= buildList(this.store.all(), this.options());
+    this.list ??= timed('notes list', () => buildList(this.store.all(), this.options()));
     return this.list;
   }
 

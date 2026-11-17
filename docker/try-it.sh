@@ -5,6 +5,7 @@
 #
 #   ./docker/try-it.sh          real VS Code over noVNC -> http://localhost:8443/vnc.html
 #   ./docker/try-it.sh --web    code-server in the browser -> http://localhost:8443
+#   ./docker/try-it.sh --big    also 600 files and 6,000 notes, a big project
 #   PORT=9000 ./docker/try-it.sh
 #
 # The default is real desktop VS Code. code-server serves webviews through a
@@ -16,9 +17,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${PORT:-8443}"
 MODE="desktop"
-[ "${1:-}" = "--web" ] && MODE="web"
+BIG=""
+for arg in "$@"; do
+  case "$arg" in
+    --web) MODE="web" ;;
+    --big) BIG=1 ;;
+    *) echo "unknown option: $arg (use --web and/or --big)" >&2; exit 1 ;;
+  esac
+done
 
-if [ ! -f "$ROOT/dist/laxative.vsix" ]; then
+# Built again whenever the source is newer than the last build, so the sandbox
+# never runs an old version of the extension.
+VSIX="$ROOT/dist/laxative.vsix"
+if [ ! -f "$VSIX" ] || [ -n "$(find "$ROOT/src" "$ROOT/media" "$ROOT/package.json" -newer "$VSIX" -type f -print -quit)" ]; then
   echo "Building the extension first..."
   "$ROOT/docker/test.sh" package
 fi
@@ -312,6 +323,16 @@ are never touched.
 If a webview ever looks blank, run **Laxative: Show Rendering Diagnostics**:
 it reports what each webview actually put on screen.
 SAMPLE
+
+if [ -n "$BIG" ]; then
+  # Node lives in the test image, not on the host.
+  echo "Seeding 600 files and 6,000 notes..."
+  docker build -q -f "$ROOT/docker/Dockerfile" -t laxative-test "$ROOT" >/dev/null
+  docker run --rm -u "$(id -u):$(id -g)" \
+    -v "$SANDBOX/project:/project" \
+    -v "$ROOT/docker/seed-big.mjs:/seed-big.mjs:ro" \
+    --entrypoint node laxative-test /seed-big.mjs /project
+fi
 
 git -C "$SANDBOX/project" init -q
 git -C "$SANDBOX/project" add -A

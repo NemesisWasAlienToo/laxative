@@ -14,7 +14,8 @@ run_unit() {
   npx tsc --noEmit -p tsconfig.json
   echo "=== unit tests ==="
   npx tsc -p tsconfig.test.json
-  npx mocha 'out-test/test/unit/**/*.test.js'
+  # The graph performance test only runs with `perf`.
+  npx mocha 'out-test/test/unit/**/*.test.js' --ignore 'out-test/test/unit/graphPerf.test.js'
 }
 
 run_integration() {
@@ -23,6 +24,18 @@ run_integration() {
   echo "=== integration tests (headless VS Code) ==="
   npx tsc -p tsconfig.test.json
   xvfb-run -a --server-args="-screen 0 1280x1024x24" node out-test/test/integration/runTests.js
+}
+
+# The performance tests: a 6,000-note graph in jsdom, and a 600-file,
+# 6,000-note project in a real headless VS Code. They print what they measure.
+run_perf() {
+  echo "=== build ==="
+  node esbuild.mjs
+  npx tsc -p tsconfig.test.json
+  echo "=== graph performance (jsdom) ==="
+  npx mocha out-test/test/unit/graphPerf.test.js
+  echo "=== project performance (headless VS Code) ==="
+  LAXATIVE_PERF=1 xvfb-run -a --server-args="-screen 0 1280x1024x24" node out-test/test/integration/runTests.js
 }
 
 run_package() {
@@ -87,6 +100,7 @@ case "${1:-all}" in
   desktop) run_desktop ;;
   unit) run_unit ;;
   integration) run_integration ;;
+  perf) run_perf ;;
   package) run_package ;;
   all) run_unit; run_integration; run_package ;;
   shell) exec bash ;;

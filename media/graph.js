@@ -92,7 +92,45 @@
   // disturbed. Past this range two notes simply ignore each other, which gives
   // the layout an equilibrium to settle at and lets two parked clusters be
   // genuinely independent of one another.
-  const REPEL_RANGE_SQ = 320 * 320;
+  const REPEL_RANGE = 320;
+  const REPEL_RANGE_SQ = REPEL_RANGE * REPEL_RANGE;
+  // Since notes further apart than that ignore each other, each note only has
+  // to be compared with the notes in the grid cells around its own. Comparing
+  // every pair was 18 million comparisons a step with 6,000 notes.
+  const CELL = REPEL_RANGE;
+  // In a graph bigger than this, dragging a note moves only the notes near it:
+  // waking all of them for every drag made a big graph crawl, and a note on the
+  // far side has no reason to move because you moved this one.
+  const LOCAL_LIMIT = 400;
+  const LOCAL_RADIUS = 450;
+  /** ...and at most this many of them, the nearest, however crowded it is. */
+  const LOCAL_MAX = 200;
+  const LOCAL_RADIUS_SQ = LOCAL_RADIUS * LOCAL_RADIUS;
+  /** Notes this close to the drag push on the ones that move, so they are
+   *  the only ones put in the grid while dragging. */
+  const NEAR_SQ = (LOCAL_RADIUS + CELL) * (LOCAL_RADIUS + CELL);
+  // A frame does as many layout steps as fit in this, at least one, so a big
+  // graph settles over more frames instead of stalling each one.
+  const FRAME_BUDGET_MS = 6;
+  // The first layout is worked out before anything is shown, up to this long;
+  // a big graph then finishes settling on screen instead of keeping you
+  // waiting on a blank panel.
+  const BURN_IN_BUDGET_MS = 1000;
+  // New notes arriving in numbers are laid out on a spiral this far apart,
+  // sized to how many there are, rather than piled on one small circle.
+  const SPIRAL_SPACING = 45;
+  const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+  // File and hashtag links are dotted only while that is cheap: past this many
+  // dots on screen they are drawn as plain faint lines...
+  const MANY_DOTS = 3000;
+  // ...and past this many of them on screen (a big graph, zoomed right out),
+  // not at all: thousands of faint lines are a grey haze that costs more to
+  // draw than everything else together. Links between notes always show.
+  const MANY_GROUP_LINKS = 2000;
+  // An arrow head: its length, and the angle each side makes with the link.
+  const HEAD = 12;
+  const HEAD_COS = Math.cos(0.52);
+  const HEAD_SIN = Math.sin(0.52);
   // ...and, once you have arranged the graph yourself, each note is held
   // gently at the spot it last came to rest in. That is what replaces the pull
   // towards the middle: the layout keeps its shape and its size wherever you
@@ -109,6 +147,12 @@
    *  and the arrangement is left alone. Tidy puts it back. */
   let arranged = false;
   let saveTimer = null;
+  /** The note being dragged in a big graph: only notes near it move, until
+   *  the layout comes to rest again. Null means every note is free to move. */
+  let localCentre = null;
+  /** False until the first notes arrive, so an empty canvas says it is
+   *  loading rather than that there are no notes. */
+  let received = false;
 
   // The view is torn down and rebuilt whenever its panel is closed and
   // reopened, so the layout is kept in the webview's own persisted state.
@@ -137,7 +181,9 @@
       openOnDouble,
       revealOnOpen,
       linkTension,
-      arranged
+      arranged,
+      // Notes put somewhere by hand: their links no longer pull them away.
+      placed: nodes.filter((node) => node.placed).map((node) => node.id)
     });
   }
 
@@ -214,7 +260,13 @@
           known.reduce((sum, p) => sum + p[1], 0) / known.length
         ]
       : [width / 2, height / 2];
+    received = true;
     let placed = 0;
+    // A few new notes go on a ring around the others; many at once go on a
+    // spiral that grows with their number, so they start spread out instead
+    // of thousands deep on one small circle.
+    const fresh = payload.nodes.length - known.length;
+    let freshIndex = 0;
     nodes = payload.nodes.map((n, i) => {
       const old = previous.get(n.id);
       const remembered = saved && saved.positions && saved.positions[n.id];
@@ -227,6 +279,11 @@
       } else if (remembered) {
         [x, y] = remembered;
         placed++;
+      } else if (fresh > 50) {
+        const k = freshIndex++;
+        const r = SPIRAL_SPACING * Math.sqrt(k + 0.5);
+        x = seed[0] + Math.cos(k * GOLDEN_ANGLE) * r;
+        y = seed[1] + Math.sin(k * GOLDEN_ANGLE) * r;
       } else {
         x = seed[0] + Math.cos(angle) * 160 + (Math.random() - 0.5) * 40;
         y = seed[1] + Math.sin(angle) * 160 + (Math.random() - 0.5) * 40;
@@ -236,7 +293,12 @@
       const search = [n.title, n.excerpt, n.file || '', ...(n.tags || []).map((t) => '#' + t)]
         .join('\n')
         .toLowerCase();
-      return { ...n, search, x, y, hx: x, hy: y, vx: 0, vy: 0, degree: 0 };
+      // Its colour, worked out once rather than on every frame.
+      const colour = colorFor(n.file);
+      const placedByHand = old
+        ? old.placed === true
+        : !!(saved && Array.isArray(saved.placed) && saved.placed.includes(n.id));
+      return { ...n, search, colour, placed: placedByHand, x, y, hx: x, hy: y, vx: 0, vy: 0, degree: 0 };
     });
     const byId = new Map(nodes.map((n) => [n.id, n]));
     edges = [];
@@ -277,6 +339,7 @@
     alpha = 0;
     alphaTarget = 0;
     settled = true;
+    localCentre = null;
   }
 
   /**
@@ -294,11 +357,19 @@
     alpha = warmth;
     alphaTarget = warmth;
     settled = false;
+    const started = performance.now();
     for (let i = 0; i < budget && !settled; i++) {
       if (i === hot) {
         alphaTarget = 0;
       }
       step();
+      if (performance.now() - started > BURN_IN_BUDGET_MS) {
+        // Out of time: show it now and let it finish settling on screen.
+        alphaTarget = 0;
+        annealing = false;
+        anchor();
+        return;
+      }
     }
     rest();
     anchor();
@@ -311,6 +382,12 @@
    * kept until the notes or the two grouping options change.
    */
   let groupEdgeCache = null;
+  /** Links and grouping links together, built along with the grouping ones. */
+  let allEdges = [];
+  function linksAndGroups() {
+    groupEdges();
+    return allEdges;
+  }
   function groupEdges() {
     if (groupEdgeCache) {
       return groupEdgeCache;
@@ -343,6 +420,7 @@
       chain(byTag, 'tag');
     }
     groupEdgeCache = extra;
+    allEdges = edges.concat(extra);
     return extra;
   }
 
@@ -359,35 +437,46 @@
     alpha += (alphaTarget - alpha) * ALPHA_DECAY;
     const width = canvas.clientWidth || 800;
     const height = canvas.clientHeight || 600;
-    const springs = edges.concat(groupEdges());
 
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let distanceSq = dx * dx + dy * dy;
-        if (distanceSq > REPEL_RANGE_SQ) {
-          continue;
+    // Which notes move this step: all of them, or in a big graph being
+    // dragged, only those near the note in your hand.
+    let moving = nodes;
+    let near = nodes;
+    if (localCentre) {
+      moving = [];
+      near = [];
+      for (const node of nodes) {
+        const dx = node.x - localCentre.x;
+        const dy = node.y - localCentre.y;
+        node.distanceSq = dx * dx + dy * dy;
+        node.free = false;
+        if (node.distanceSq < LOCAL_RADIUS_SQ) {
+          moving.push(node);
         }
-        if (distanceSq < 0.01) {
-          dx = Math.random() - 0.5;
-          dy = Math.random() - 0.5;
-          distanceSq = 0.01;
+        if (node.distanceSq < NEAR_SQ) {
+          near.push(node);
         }
-        const force = (9000 / distanceSq) * alpha;
-        const distance = Math.sqrt(distanceSq);
-        const fx = (dx / distance) * force;
-        const fy = (dy / distance) * force;
-        a.vx -= fx;
-        a.vy -= fy;
-        b.vx += fx;
-        b.vy += fy;
+      }
+      // A crowded graph has hundreds of notes in reach; the nearest move.
+      if (moving.length > LOCAL_MAX) {
+        moving.sort((a, b) => a.distanceSq - b.distanceSq);
+        moving.length = LOCAL_MAX;
+      }
+      for (const node of moving) {
+        node.free = true;
+      }
+    } else {
+      for (const node of nodes) {
+        node.free = true;
       }
     }
 
-    for (const edge of linkTension || annealing ? springs : []) {
+    repel(moving, near);
+
+    for (const edge of linkTension || annealing ? linksAndGroups() : []) {
+      if (!edge.from.free && !edge.to.free) {
+        continue;
+      }
       const dx = edge.to.x - edge.from.x;
       const dy = edge.to.y - edge.from.y;
       const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
@@ -396,13 +485,21 @@
       const force = (distance - restLength) * stiffness * alpha;
       const fx = (dx / distance) * force;
       const fy = (dy / distance) * force;
-      edge.from.vx += fx;
-      edge.from.vy += fy;
-      edge.to.vx -= fx;
-      edge.to.vy -= fy;
+      // A note you put somewhere yourself stays there: its links pull the
+      // notes at their other end, not it. Otherwise a note dragged out of the
+      // crowd was yanked hundreds of pixels back towards it, by links
+      // stretched across the whole graph, whenever anything near it moved.
+      if (!edge.from.placed) {
+        edge.from.vx += fx;
+        edge.from.vy += fy;
+      }
+      if (!edge.to.placed) {
+        edge.to.vx -= fx;
+        edge.to.vy -= fy;
+      }
     }
 
-    for (const node of nodes) {
+    for (const node of moving) {
       if (arranged) {
         node.vx += (node.hx - node.x) * HOME_PULL * alpha;
         node.vy += (node.hy - node.y) * HOME_PULL * alpha;
@@ -432,10 +529,138 @@
     }
   }
 
+  /**
+   * The part of the line from (ax, ay) to (bx, by) inside the rectangle, as
+   * [x0, y0, x1, y1], or null when none of it is (Liang-Barsky).
+   */
+  function clip(ax, ay, bx, by, left, top, right, bottom) {
+    const dx = bx - ax;
+    const dy = by - ay;
+    let t0 = 0;
+    let t1 = 1;
+    // The four sides in turn, written out: this runs for links crossing the
+    // edge of the screen, every frame, so it allocates nothing.
+    const ps = [-dx, dx, -dy, dy];
+    const qs = [ax - left, right - ax, ay - top, bottom - ay];
+    for (let i = 0; i < 4; i++) {
+      const p = ps[i];
+      const q = qs[i];
+      if (p === 0) {
+        if (q < 0) return null;
+        continue;
+      }
+      const t = q / p;
+      if (p < 0) {
+        if (t > t1) return null;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return null;
+        if (t < t1) t1 = t;
+      }
+    }
+    return [ax + t0 * dx, ay + t0 * dy, ax + t1 * dx, ay + t1 * dy];
+  }
+
+  /** The grid cell a position falls in, as one number for a Map key. */
+  function cellOf(x, y) {
+    return (Math.floor(x / CELL) + 50000) * 100000 + (Math.floor(y / CELL) + 50000);
+  }
+
+  /** Pushes two notes apart, `a` the other way from `b`. Both, or only `a`. */
+  function push(a, b, both) {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let distanceSq = dx * dx + dy * dy;
+    if (distanceSq > REPEL_RANGE_SQ) {
+      return;
+    }
+    if (distanceSq < 0.01) {
+      dx = Math.random() - 0.5;
+      dy = Math.random() - 0.5;
+      distanceSq = 0.01;
+    }
+    const force = (9000 / distanceSq) * alpha;
+    const distance = Math.sqrt(distanceSq);
+    const fx = (dx / distance) * force;
+    const fy = (dy / distance) * force;
+    a.vx -= fx;
+    a.vy -= fy;
+    if (both) {
+      b.vx += fx;
+      b.vy += fy;
+    }
+  }
+
+  /**
+   * Notes push each other apart, out to REPEL_RANGE and no further, so each
+   * note is only compared with the notes in its own and the neighbouring grid
+   * cells: the same forces as comparing every pair, at a fraction of the work.
+   */
+  function repel(moving, near) {
+    const grid = new Map();
+    for (const node of near) {
+      const key = cellOf(node.x, node.y);
+      const cell = grid.get(key);
+      if (cell) {
+        cell.push(node);
+      } else {
+        grid.set(key, [node]);
+      }
+    }
+    if (moving !== nodes) {
+      // Only some notes move: each is pushed by everything near it, moving or
+      // not, and pushes back on nothing (what does not move ignores forces).
+      for (const a of moving) {
+        const cx = Math.floor(a.x / CELL);
+        const cy = Math.floor(a.y / CELL);
+        for (let ox = -1; ox <= 1; ox++) {
+          for (let oy = -1; oy <= 1; oy++) {
+            const cell = grid.get((cx + ox + 50000) * 100000 + (cy + oy + 50000));
+            if (!cell) {
+              continue;
+            }
+            for (const b of cell) {
+              if (b !== a) {
+                push(a, b, false);
+              }
+            }
+          }
+        }
+      }
+      return;
+    }
+    // Everything moves: each pair once, looking only at the cells to one side
+    // (right, and the row below) so no pair is counted twice.
+    for (const [key, cell] of grid) {
+      for (let i = 0; i < cell.length; i++) {
+        for (let j = i + 1; j < cell.length; j++) {
+          push(cell[i], cell[j], true);
+        }
+      }
+      for (const offset of [100000 - 1, 100000, 100000 + 1, 1]) {
+        const other = grid.get(key + offset);
+        if (!other) {
+          continue;
+        }
+        for (const a of cell) {
+          for (const b of other) {
+            push(a, b, true);
+          }
+        }
+      }
+    }
+  }
+
   /** Well-connected notes read as bigger hubs, with a curve that keeps the
    *  difference visible without letting one note dominate. */
   function radiusOf(node) {
-    return 5.5 + Math.sqrt(node.degree) * 3.6;
+    // Worked out once per note when the notes arrive: asked for several times
+    // a frame for every note.
+    if (node.radius === undefined || node.radiusFor !== node.degree) {
+      node.radius = 5.5 + Math.sqrt(node.degree) * 3.6;
+      node.radiusFor = node.degree;
+    }
+    return node.radius;
   }
 
   /** Search terms in a box, the same way the search view splits them. */
@@ -494,7 +719,7 @@
       ctx.font = '13px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(
-        'No notes yet. Add one with Laxative: Add Note at Cursor.',
+        received ? 'No notes yet. Add one with Laxative: Add Note at Cursor.' : 'Loading notes…',
         canvas.clientWidth / 2,
         canvas.clientHeight / 2
       );
@@ -517,87 +742,219 @@
       }
     }
 
-    for (const edge of edges.concat(groupEdges()).filter(visibleEdge)) {
-      const active = !hovered || edge.from === hovered || edge.to === hovered;
-      ctx.strokeStyle = foreground;
-      ctx.globalAlpha = edge.kind === 'ref' ? (active ? 0.5 : 0.1) : active ? 0.16 : 0.05;
-      ctx.lineWidth = edge.kind === 'ref' ? 1.4 : 1;
-      ctx.setLineDash(edge.kind === 'ref' ? [] : edge.kind === 'tag' ? [1, 4] : [3, 4]);
-      ctx.beginPath();
-      ctx.moveTo(edge.from.x, edge.from.y);
-      ctx.lineTo(edge.to.x, edge.to.y);
-      ctx.stroke();
+    // What is on screen, in graph coordinates, with a margin for labels and
+    // halos: anything wholly outside it is not drawn at all.
+    const margin = 40 / view.scale + 20;
+    const left = -view.x / view.scale - margin;
+    const top = -view.y / view.scale - margin;
+    const right = (canvas.clientWidth - view.x) / view.scale + margin;
+    const bottom = (canvas.clientHeight - view.y) / view.scale + margin;
+    const onScreen = (node) =>
+      node.x >= left && node.x <= right && node.y >= top && node.y <= bottom;
 
-      if (edge.kind === 'ref') {
-        // Arrow head, stopped at the target's edge. Big enough and blunt
-        // enough to read which way a link points at a glance: a long thin
-        // head reads as more line, not as a direction.
+    // Edges are drawn in batches, one stroke per look (kind, and lit or not),
+    // rather than one stroke each: thousands of strokes a frame is what made
+    // a big graph slow to draw.
+    const KINDS = ['ref', 'file', 'tag'];
+    const batches = KINDS.map(() => [[], []]); // [kind][lit] -> edges
+    const heads = { lit: [], dim: [] };
+    for (const edge of linksAndGroups()) {
+      const a = edge.from;
+      const b = edge.to;
+      if (
+        (a.x < left && b.x < left) ||
+        (a.x > right && b.x > right) ||
+        (a.y < top && b.y < top) ||
+        (a.y > bottom && b.y > bottom) ||
+        !visibleEdge(edge)
+      ) {
+        continue;
+      }
+      // Only the part on screen is drawn. A dotted line is drawn dot by dot
+      // along its whole length, off screen too, and links cross the whole
+      // graph: zoomed in, a few hundred of them made every frame slow.
+      // Wholly on screen, which zoomed out is nearly all of them: drawn as
+      // it is, with no clipping worked out and nothing new allocated.
+      const inside = onScreen(a) && onScreen(b);
+      const segment = inside ? edge : clip(a.x, a.y, b.x, b.y, left, top, right, bottom);
+      if (!segment) {
+        continue;
+      }
+      const active = !hovered || a === hovered || b === hovered;
+      batches[KINDS.indexOf(edge.kind)][active ? 1 : 0].push(segment);
+      if (edge.kind === 'ref' && onScreen(b)) {
+        (active ? heads.lit : heads.dim).push(edge);
+      }
+    }
+    const groupLinks = batches[1][0].length + batches[1][1].length + batches[2][0].length + batches[2][1].length;
+    KINDS.forEach((kind, k) => {
+      [0, 1].forEach((lit) => {
+        const batch = batches[k][lit];
+        if (batch.length === 0) {
+          return;
+        }
+        if (kind !== 'ref' && groupLinks > MANY_GROUP_LINKS && !(hovered && lit === 1)) {
+          return; // Too many to be worth drawing; the hovered note's still show.
+        }
+        const active = lit === 1;
+        ctx.strokeStyle = foreground;
+        ctx.globalAlpha = kind === 'ref' ? (active ? 0.6 : 0.12) : active ? 0.16 : 0.05;
+        // One screen pixel wide at every zoom. The canvas draws lines of a
+        // pixel or less on a fast path; anything thicker goes the slow way,
+        // and zoomed in, links 1.4 or 2 pixels wide made a frame take 25 ms
+        // with only a handful of notes on screen. Links between notes are a
+        // little stronger instead of thicker.
+        ctx.lineWidth = 1 / view.scale;
+        // Dots and dashes a fixed number of screen pixels apart whatever the
+        // zoom; and with hundreds of these links on screen, plain faint lines:
+        // each dot is drawn on its own, and at that density they read as
+        // lines anyway.
+        const unit = 1 / view.scale;
+        // How many dots that would be: the batch's length on screen, one dot
+        // (or dash) every 5 pixels.
+        let length = 0;
+        if (kind !== 'ref') {
+          for (const segment of batch) {
+            length += segment.from
+              ? Math.abs(segment.to.x - segment.from.x) + Math.abs(segment.to.y - segment.from.y)
+              : Math.abs(segment[2] - segment[0]) + Math.abs(segment[3] - segment[1]);
+          }
+        }
+        const plain = kind === 'ref' || (length * view.scale) / 5 > MANY_DOTS;
+        ctx.setLineDash(plain ? [] : kind === 'tag' ? [unit, 4 * unit] : [3 * unit, 4 * unit]);
+        ctx.beginPath();
+        for (const segment of batch) {
+          if (segment.from) {
+            ctx.moveTo(segment.from.x, segment.from.y);
+            ctx.lineTo(segment.to.x, segment.to.y);
+          } else {
+            ctx.moveTo(segment[0], segment[1]);
+            ctx.lineTo(segment[2], segment[3]);
+          }
+        }
+        ctx.stroke();
+      });
+    });
+    ctx.setLineDash([]);
+    // Arrow heads, stopped at the target's edge. Big enough and blunt enough
+    // to read which way a link points at a glance: a long thin head reads as
+    // more line, not as a direction.
+    // Zoomed right out, a head is a couple of pixels: too small to show a
+    // direction, and thousands of them cost more than the links themselves.
+    // Drawn once they are big enough to read, or when there are few.
+    const headsReadable = HEAD * view.scale >= 4 || heads.dim.length + heads.lit.length < 500;
+    for (const [list, alphaOf] of [[heads.dim, 0.2], [heads.lit, 0.85]]) {
+      if (list.length === 0 || !headsReadable) {
+        continue;
+      }
+      ctx.globalAlpha = alphaOf;
+      ctx.fillStyle = foreground;
+      ctx.beginPath();
+      for (const edge of list) {
         const dx = edge.to.x - edge.from.x;
         const dy = edge.to.y - edge.from.y;
-        const distance = Math.max(Math.hypot(dx, dy), 0.01);
+        const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
+        // Along the link, and across it: the head's corners from these alone,
+        // with no trigonometry for each of thousands of links every frame.
+        const ux = dx / distance;
+        const uy = dy / distance;
         const r = radiusOf(edge.to) + 3;
-        const tipX = edge.to.x - (dx / distance) * r;
-        const tipY = edge.to.y - (dy / distance) * r;
-        const angle = Math.atan2(dy, dx);
-        const head = 12;
-        const spread = 0.52;
-        ctx.globalAlpha = active ? 0.85 : 0.2;
-        ctx.beginPath();
+        const tipX = edge.to.x - ux * r;
+        const tipY = edge.to.y - uy * r;
+        const back = HEAD * HEAD_COS;
+        const side = HEAD * HEAD_SIN;
         ctx.moveTo(tipX, tipY);
-        ctx.lineTo(tipX - head * Math.cos(angle - spread), tipY - head * Math.sin(angle - spread));
+        ctx.lineTo(tipX - ux * back + uy * side, tipY - uy * back - ux * side);
         // Notched at the back, so overlapping heads stay separable.
-        ctx.lineTo(tipX - head * 0.7 * Math.cos(angle), tipY - head * 0.7 * Math.sin(angle));
-        ctx.lineTo(tipX - head * Math.cos(angle + spread), tipY - head * Math.sin(angle + spread));
+        ctx.lineTo(tipX - ux * HEAD * 0.7, tipY - uy * HEAD * 0.7);
+        ctx.lineTo(tipX - ux * back - uy * side, tipY - uy * back + ux * side);
         ctx.closePath();
-        ctx.fillStyle = foreground;
-        ctx.fill();
       }
+      ctx.fill();
     }
     ctx.setLineDash([]);
 
+    // Notes are filled in batches too, one fill per colour (and dimmed or
+    // not), with the halos, rings and labels drawn over them afterwards.
+    const shown = [];
+    const fills = new Map();
     for (const node of nodes) {
-      if (!isMatch(node)) {
+      if (!isMatch(node) || !onScreen(node)) {
+        continue;
+      }
+      shown.push(node);
+      const dimmed = hovered && !neighbours.has(node.id);
+      let pair = fills.get(node.colour);
+      if (!pair) {
+        fills.set(node.colour, (pair = [[], []]));
+      }
+      pair[dimmed ? 1 : 0].push(node);
+    }
+    const circle = (node, r) => {
+      ctx.moveTo(node.x + r, node.y);
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    };
+
+    // A halo behind a selected note in the editor's selection colour: reads as
+    // "selected" at a glance and stays distinct from the focus ring.
+    const halos = shown.filter((node) => selected.has(node.id));
+    if (halos.length > 0) {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = selectionColour;
+      ctx.beginPath();
+      for (const node of halos) {
+        circle(node, radiusOf(node) + 7);
+      }
+      ctx.fill();
+    }
+    for (const [colour, pair] of fills) {
+      pair.forEach((batch, dimmed) => {
+        if (batch.length === 0) {
+          return;
+        }
+        ctx.globalAlpha = dimmed ? 0.25 : 1;
+        ctx.fillStyle = colour;
+        ctx.beginPath();
+        for (const node of batch) {
+          circle(node, radiusOf(node));
+        }
+        ctx.fill();
+      });
+    }
+    if (hovered && shown.includes(hovered)) {
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = foreground;
+      ctx.beginPath();
+      circle(hovered, radiusOf(hovered));
+      ctx.stroke();
+    }
+    const focusedNode = shown.find((node) => node.id === focusedId);
+    if (focusedNode) {
+      // A ring with a gap, in the theme's focus colour: the same cue VS Code
+      // uses for "this is the one with focus", and it survives dimming.
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(focusedNode.x, focusedNode.y, radiusOf(focusedNode) + 4, 0, Math.PI * 2);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = focusColour;
+      ctx.stroke();
+    }
+    ctx.fillStyle = foreground;
+    ctx.textAlign = 'center';
+    let font = '';
+    for (const node of shown) {
+      if (!(view.scale > 0.55 || node === hovered || node === focusedNode)) {
         continue;
       }
       const dimmed = hovered && !neighbours.has(node.id);
-      if (selected.has(node.id)) {
-        // A halo behind the note in the editor's selection colour: reads as
-        // "selected" at a glance and stays distinct from the focus ring.
-        ctx.globalAlpha = 0.85;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, radiusOf(node) + 7, 0, Math.PI * 2);
-        ctx.fillStyle = selectionColour;
-        ctx.fill();
+      ctx.globalAlpha = dimmed ? 0.3 : 0.9;
+      const wanted = `${Math.min(11 + node.degree * 0.4, 15).toFixed(1)}px system-ui, sans-serif`;
+      if (wanted !== font) {
+        ctx.font = font = wanted;
       }
-      ctx.globalAlpha = dimmed ? 0.25 : 1;
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, radiusOf(node), 0, Math.PI * 2);
-      ctx.fillStyle = colorFor(node.file);
-      ctx.fill();
-      if (node === hovered) {
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = foreground;
-        ctx.stroke();
-      }
-      const focused = node.id === focusedId;
-      if (focused) {
-        // A ring with a gap, in the theme's focus colour: the same cue VS Code
-        // uses for "this is the one with focus", and it survives dimming.
-        ctx.globalAlpha = 1;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, radiusOf(node) + 4, 0, Math.PI * 2);
-        ctx.lineWidth = 2.5;
-        ctx.strokeStyle = focusColour;
-        ctx.stroke();
-      }
-      if (view.scale > 0.55 || node === hovered || focused) {
-        ctx.globalAlpha = dimmed ? 0.3 : 0.9;
-        ctx.fillStyle = foreground;
-        ctx.font = `${Math.min(11 + node.degree * 0.4, 15).toFixed(1)}px system-ui, sans-serif`;
-        ctx.textAlign = 'center';
-        const label = node.title.length > 28 ? node.title.slice(0, 27) + '…' : node.title;
-        ctx.fillText(label, node.x, node.y + radiusOf(node) + 12);
-      }
+      const label = node.title.length > 28 ? node.title.slice(0, 27) + '…' : node.title;
+      ctx.fillText(label, node.x, node.y + radiusOf(node) + 12);
     }
     if (marquee) {
       const box = boxOf(marquee);
@@ -613,6 +970,55 @@
     }
     ctx.restore();
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Times drawing the whole graph at each zoom level, around the middle of the
+   * canvas, then puts the view back. Reading one pixel back makes the canvas
+   * finish its drawing, so what is timed is the drawing and not just the
+   * queueing of it. For the performance tests; nothing calls it otherwise.
+   */
+  function benchmark(scales) {
+    const saved = { x: view.x, y: view.y, scale: view.scale };
+    const cx = canvas.clientWidth / 2;
+    const cy = canvas.clientHeight / 2;
+    // The graph's own middle, so zooming in lands among the notes.
+    const mid = nodes.length
+      ? [nodes.reduce((s, n) => s + n.x, 0) / nodes.length, nodes.reduce((s, n) => s + n.y, 0) / nodes.length]
+      : [0, 0];
+    const results = [];
+    // What reading the pixel back costs on its own, with nothing drawn.
+    const empty = [];
+    for (let i = 0; i < 5; i++) {
+      const started = performance.now();
+      ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+      ctx.getImageData(0, 0, 1, 1);
+      empty.push(performance.now() - started);
+    }
+    empty.sort((a, b) => a - b);
+    results.push({ scale: 'empty frame', ms: Math.round(empty[2] * 10) / 10, shown: 0 });
+    for (const scale of scales) {
+      view.scale = scale;
+      view.x = cx - mid[0] * scale;
+      view.y = cy - mid[1] * scale;
+      const times = [];
+      for (let i = 0; i < 5; i++) {
+        const started = performance.now();
+        draw();
+        ctx.getImageData(0, 0, 1, 1);
+        times.push(performance.now() - started);
+      }
+      times.sort((a, b) => a - b);
+      const shown = nodes.filter(
+        (n) =>
+          n.x * scale + view.x >= 0 && n.x * scale + view.x <= canvas.clientWidth &&
+          n.y * scale + view.y >= 0 && n.y * scale + view.y <= canvas.clientHeight
+      ).length;
+      results.push({ scale, ms: Math.round(times[2] * 10) / 10, shown });
+    }
+    view = saved;
+    draw();
+    vscode.postMessage({ type: 'benchmark', results });
   }
 
   let lastReport = '';
@@ -640,9 +1046,18 @@
       unsettle(0.4);
     }
     // Several steps a frame: the anneal is measured in steps, so this is what
-    // turns a ~50-step settle into ~200ms rather than most of a second.
+    // turns a ~50-step settle into ~200ms rather than most of a second. A big
+    // graph does what fits in the frame's budget, so it settles over a few
+    // more frames rather than freezing on each one.
+    // While a note is in your hand, one step a frame keeps the drag itself
+    // smooth; the full budget comes back once it is let go.
+    const started = performance.now();
+    const budget = dragging && nodes.length > LOCAL_LIMIT ? 0 : FRAME_BUDGET_MS;
     for (let i = 0; i < STEPS_PER_FRAME; i++) {
       step();
+      if (performance.now() - started > budget) {
+        break;
+      }
     }
     draw();
     report();
@@ -782,6 +1197,10 @@
         arranged = true;
         anchor();
       }
+      // A big graph: the notes around this one make room, the rest stay put.
+      if (nodes.length > LOCAL_LIMIT) {
+        localCentre = node;
+      }
       unsettle(DRAG_ALPHA);
     } else {
       panning = { x: e.clientX - view.x, y: e.clientY - view.y };
@@ -800,9 +1219,11 @@
         if (isHeld(node)) {
           node.x += dx;
           node.y += dy;
-          // Where you are putting it is where it now belongs.
+          // Where you are putting it is where it now belongs, and its links
+          // stop pulling it away from there.
           node.hx = node.x;
           node.hy = node.y;
+          node.placed = true;
         }
       }
       unsettle(DRAG_ALPHA);
@@ -836,7 +1257,12 @@
       title.textContent = node.title;
       const where = document.createElement('div');
       where.className = 'where';
-      where.textContent = node.file ? `${node.file}:${node.line + 1}` : 'no location';
+      // A note whose code has gone has no line worth showing.
+      where.textContent = !node.file
+        ? 'no location'
+        : node.lost
+          ? `${node.file} · code not found`
+          : `${node.file}:${node.line + 1}`;
       const excerpt = document.createElement('div');
       excerpt.className = 'excerpt';
       excerpt.textContent = node.excerpt;
@@ -936,6 +1362,9 @@
   tidy.addEventListener('click', () => {
     // Hands the layout back to the simulation, framed in the middle again.
     arranged = false;
+    for (const node of nodes) {
+      node.placed = false;
+    }
     burnIn(1, true);
     recentre();
     saveStateSoon();
@@ -1080,6 +1509,8 @@
       setGraph(event.data);
     } else if (event.data.type === 'focus') {
       focusedId = event.data.id || null;
+    } else if (event.data.type === 'benchmark') {
+      benchmark(event.data.scales || []);
     }
   });
 

@@ -17,6 +17,8 @@ export interface ListNote {
   file?: string;
   line?: number;
   character?: number;
+  /** Its code is no longer in the file; see `Note`. */
+  lost?: boolean;
   tags: string[];
   store?: string;
 }

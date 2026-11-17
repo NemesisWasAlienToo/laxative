@@ -35,8 +35,32 @@ export class NoteDocuments implements vscode.FileSystemProvider, vscode.Disposab
       // does not fire promptly for provider-backed documents.
       vscode.window.tabGroups.onDidChangeTabs((e) => void this.discardEmpty(e.closed)),
       // Closing the editor of a deleted note keeps stale tabs from lingering.
-      store.onDidChange(() => this.closeOrphanedEditors())
+      store.onDidChange(() => {
+        this.closeOrphanedEditors();
+        this.reloadStale();
+      })
     );
+  }
+
+  /**
+   * An open note document with no unsaved edits shows what was stored when it
+   * was opened. When the stored note has moved on — saved from a tab under its
+   * old title, or a note file pulled from git — VS Code is told, so it reads
+   * the note again rather than keep the old text.
+   */
+  private reloadStale(): void {
+    const stale = vscode.workspace.textDocuments.filter((document) => {
+      if (document.uri.scheme !== NOTE_SCHEME || document.isDirty || document.isClosed) {
+        return false;
+      }
+      const note = this.store.get(idOf(document.uri));
+      return note !== undefined && note.body !== document.getText();
+    });
+    if (stale.length > 0) {
+      this.emitter.fire(
+        stale.map((document) => ({ type: vscode.FileChangeType.Changed, uri: document.uri }))
+      );
+    }
   }
 
   /**
@@ -88,11 +112,16 @@ export class NoteDocuments implements vscode.FileSystemProvider, vscode.Disposab
    * is reused rather than duplicated, and the tab is never closed and reopened
    * behind the user's back: its name is settled when the note is opened.
    */
-  static async open(note: Note): Promise<vscode.TextEditor | undefined> {
+  static async open(
+    note: Note,
+    column?: vscode.ViewColumn
+  ): Promise<vscode.TextEditor | undefined> {
     const existing = NoteDocuments.openTabFor(note.id);
     const uri =
       (existing?.input as { uri?: vscode.Uri } | undefined)?.uri ?? NoteDocuments.uriFor(note);
-    const viewColumn = existing ? existing.group.viewColumn : NoteDocuments.columnForNotes();
+    const viewColumn = existing
+      ? existing.group.viewColumn
+      : (column ?? NoteDocuments.columnForNotes());
     try {
       const document = await vscode.workspace.openTextDocument(uri);
       return await vscode.window.showTextDocument(document, {
